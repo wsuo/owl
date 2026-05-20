@@ -12,7 +12,6 @@ import (
 	"github.com/gowvp/owl/internal/core/bz"
 	"github.com/ixugo/goddd/pkg/orm"
 	"github.com/ixugo/goddd/pkg/reason"
-	"github.com/jinzhu/copier"
 	"gorm.io/gorm"
 )
 
@@ -203,24 +202,58 @@ func getDevicePrefix(t string) string {
 	}
 }
 
-// EditChannel Update object information
+// EditChannel 部分更新通道信息
+// 仅覆盖前端实际传入的非零值字段，避免 copier 零值覆盖导致数据丢失
 func (c *Core) EditChannel(ctx context.Context, in *EditChannelInput, id string) (*Channel, error) {
-	// 禁止 app=rtp，rtp 专用于 GB28181 协议
 	if strings.EqualFold(in.App, "rtp") {
 		return nil, reason.ErrBadRequest.SetMsg("app=rtp 为 GB28181 专用，RTMP/RTSP 不可使用")
 	}
 
-	// TODO: 修改 onvif 的账号/密码 后需要重新连接设备
 	var out Channel
 	if err := c.store.Channel().Edit(ctx, &out, func(b *Channel) error {
-		if err := copier.Copy(b, in); err != nil {
-			slog.ErrorContext(ctx, "Copy", "err", err)
+		if in.Name != "" {
+			b.Name = in.Name
 		}
+		if in.App != "" {
+			b.App = in.App
+		}
+		if in.Stream != "" {
+			b.Stream = in.Stream
+		}
+		if in.DeviceID != "" {
+			b.DeviceID = in.DeviceID
+		}
+		if in.PTZType != 0 {
+			b.PTZType = in.PTZType
+		}
+		b.Config = mergeStreamConfig(b.Config, in.Config)
 		return nil
 	}, orm.Where("id=?", id)); err != nil {
 		return nil, reason.ErrDB.Withf(`Edit err[%s]`, err.Error())
 	}
 	return &out, nil
+}
+
+// mergeStreamConfig 合并流配置
+// bool 字段始终以传入值为准；string/int 仅在非零时覆盖
+func mergeStreamConfig(dst, src StreamConfig) StreamConfig {
+	if src.SourceURL != "" {
+		dst.SourceURL = src.SourceURL
+		dst.Transport = src.Transport
+		dst.TimeoutS = src.TimeoutS
+	}
+	if src.StreamKey != "" {
+		dst.StreamKey = src.StreamKey
+	}
+	if src.MediaServerID != "" {
+		dst.MediaServerID = src.MediaServerID
+	}
+	dst.Enabled = src.Enabled
+	dst.IsAuthDisabled = src.IsAuthDisabled
+	dst.EnabledAudio = src.EnabledAudio
+	dst.EnabledRemoveNoneReader = src.EnabledRemoveNoneReader
+	dst.EnabledDisabledNoneReader = src.EnabledDisabledNoneReader
+	return dst
 }
 
 // DelChannel Delete object
