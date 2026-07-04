@@ -8,16 +8,9 @@ import (
 
 // MessageNotify 心跳包 XML 结构
 type MessageNotify struct {
-	CmdType  string        `xml:"CmdType"`
-	SN       int           `xml:"SN"`
-	DeviceID string        `xml:"DeviceID"`
-	Status   string        `xml:"Status"` // 国标标准格式：Status 在根级别
-	Info     KeepaliveInfo `xml:"Info"`   // 部分厂商（如海康）将 Status 嵌套在 Info 中
-}
-
-// KeepaliveInfo 部分厂商心跳包中 Info 子元素
-type KeepaliveInfo struct {
-	Status string `xml:"Status"`
+	CmdType  string `xml:"CmdType"`
+	SN       int    `xml:"SN"`
+	DeviceID string `xml:"DeviceID"`
 }
 
 func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
@@ -25,12 +18,6 @@ func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
 	if err := sip.XMLDecode(ctx.Request.Body(), &msg); err != nil {
 		ctx.Log.Error("Message Unmarshal xml err", "err", err)
 		return
-	}
-
-	// 兼容两种 Status 位置：国标根级别 / 部分厂商嵌套在 Info 中
-	status := msg.Status
-	if status == "" {
-		status = msg.Info.Status
 	}
 
 	// 程序重启后内存丢失，收到 keepalive 时补上
@@ -43,7 +30,7 @@ func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
 
 	if err := g.svr.memoryStorer.Change(ctx.DeviceID, func(d *ipc.Device) error {
 		d.KeepaliveAt = orm.Now()
-		d.IsOnline = status == "OK" || status == "ON"
+		d.IsOnline = true // 收到心跳即视为在线，不依赖 Status 字段值
 		d.Address = ctx.Source.String()
 		d.Transport = ctx.Source.Network()
 		return nil
