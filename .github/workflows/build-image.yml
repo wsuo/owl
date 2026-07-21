@@ -35,6 +35,12 @@ jobs:
         run: |
           mkdir -p build/linux_amd64
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -X main.gitHash=${GITHUB_SHA}" -o build/linux_amd64/bin ./main.go
+      - name: Download pinned web assets
+        run: |
+          curl --fail --location --retry 3 https://github.com/gowvp/gb28181_web/releases/download/latest/www.zip --output /tmp/www.zip
+          echo "e29523cc5c797e531ab9e1f27f6d170378c80effcf605feec1d469f26287295f  /tmp/www.zip" | sha256sum --check
+          unzip -q /tmp/www.zip -d .
+          test -f www/index.html
       - uses: docker/build-push-action@v6
         with:
           context: .
