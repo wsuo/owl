@@ -109,6 +109,13 @@ func (g *GB28181API) StartSDPlayback(in *SDPlaybackInput) (*SDPlaybackSession, e
 		cleanup()
 		return nil, err
 	}
+	// INVITE 的 200 OK 必须用 ACK 完成 SIP 三次握手。设备在收到 ACK 前不会
+	// 开始发送回放 RTP；仅保存响应会造成接口成功但媒体服务器始终收不到流。
+	ack := sip.NewRequestFromResponse(sip.MethodACK, resp)
+	if err := tx.Request(ack); err != nil {
+		cleanup()
+		return nil, err
+	}
 	session := &SDPlaybackSession{ID: in.SessionID, App: "rtp", Stream: streamID, Start: in.Start, End: in.End, Channel: in.Channel, Response: resp}
 	g.sdPlaybacks.Store(in.SessionID, session)
 	return session, nil
