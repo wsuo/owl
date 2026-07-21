@@ -180,6 +180,16 @@ func (w WebHookAPI) onStreamChanged(c *gin.Context, in *onStreamChangedInput) (D
 		return newDefaultOutputOK(), nil
 	}
 
+	if strings.HasPrefix(stream, "pb") {
+		mediaServer, err := w.uc.SMSAPI.smsCore.GetMediaServer(ctx, sms.DefaultMediaServerID)
+		if err == nil {
+			if err := w.uc.SipServer.StopSDPlaybackByStream(stream, mediaServer); err != nil {
+				w.log.WarnContext(ctx, "停止 SD 回放会话失败", "stream", stream, "err", err)
+			}
+		}
+		return newDefaultOutputOK(), nil
+	}
+
 	// 流注销时停止录制
 	if err := w.recordingCore.StopRecording(ctx, app, stream); err != nil {
 		w.log.WarnContext(ctx, "停止录制失败", "stream", stream, "err", err)
@@ -222,6 +232,15 @@ func (w WebHookAPI) onPlay(c *gin.Context, in *onPublishInput) (DefaultOutput, e
 func (w WebHookAPI) onStreamNoneReader(c *gin.Context, in *onStreamNoneReaderInput) (onStreamNoneReaderOutput, error) {
 	ctx := c.Request.Context()
 	w.log.InfoContext(ctx, "webhook onStreamNoneReader", "app", in.App, "stream", in.Stream, "mediaServerID", in.MediaServerID)
+	if strings.HasPrefix(in.Stream, "pb") {
+		mediaServer, err := w.uc.SMSAPI.smsCore.GetMediaServer(ctx, sms.DefaultMediaServerID)
+		if err != nil {
+			w.log.WarnContext(ctx, "获取媒体服务器失败，交由流注销清理回放会话", "stream", in.Stream, "err", err)
+		} else if err := w.uc.SipServer.StopSDPlaybackByStream(in.Stream, mediaServer); err != nil {
+			w.log.WarnContext(ctx, "停止无人观看的 SD 回放会话失败", "stream", in.Stream, "err", err)
+		}
+		return onStreamNoneReaderOutput{Close: true}, nil
+	}
 
 	// 禁用录像时，直接关闭流
 	if w.uc.Conf.Server.Recording.Disabled {
@@ -261,6 +280,14 @@ func (w WebHookAPI) onStreamNoneReader(c *gin.Context, in *onStreamNoneReaderInp
 // https://docs.zlmediakit.com/zh/guide/media_server/web_hook_api.html#_17%E3%80%81on-rtp-server-timeout
 func (w WebHookAPI) onRTPServerTimeout(c *gin.Context, in *onRTPServerTimeoutInput) (DefaultOutput, error) {
 	w.log.InfoContext(c.Request.Context(), "webhook onRTPServerTimeout", "local_port", in.LocalPort, "ssrc", in.SSRC, "stream_id", in.StreamID, "mediaServerID", in.MediaServerID)
+	if strings.HasPrefix(in.StreamID, "pb") {
+		mediaServer, err := w.uc.SMSAPI.smsCore.GetMediaServer(c.Request.Context(), sms.DefaultMediaServerID)
+		if err != nil {
+			w.log.WarnContext(c.Request.Context(), "获取媒体服务器失败，无法清理超时回放会话", "stream", in.StreamID, "err", err)
+		} else if err := w.uc.SipServer.StopSDPlaybackByStream(in.StreamID, mediaServer); err != nil {
+			w.log.WarnContext(c.Request.Context(), "清理超时回放会话失败", "stream", in.StreamID, "err", err)
+		}
+	}
 	return newDefaultOutputOK(), nil
 }
 

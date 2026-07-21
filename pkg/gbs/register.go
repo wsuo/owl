@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 	"unicode"
 
@@ -25,7 +26,9 @@ type GB28181API struct {
 	catalog *sip.Collector[Channels]
 
 	// TODO: 待替换成 redis
-	streams *conc.Map[string, *Streams]
+	streams            *conc.Map[string, *Streams]
+	sdPlaybacks        *conc.Map[string, *SDPlaybackSession]
+	sdRecordingQueries sync.Map
 
 	svr *Server
 
@@ -40,7 +43,8 @@ func NewGB28181API(cfg *conf.Bootstrap, store ipc.Adapter, sms *sms.NodeManager)
 		catalog: sip.NewCollector(func(c1, c2 *Channels) bool {
 			return c1.ChannelID == c2.ChannelID
 		}),
-		streams: &conc.Map[string, *Streams]{},
+		streams:     &conc.Map[string, *Streams]{},
+		sdPlaybacks: &conc.Map[string, *SDPlaybackSession]{},
 	}
 	go g.catalog.Start(func(s string, channel []*Channels) {
 		// 零值不做变更，没有通道又何必注册上来

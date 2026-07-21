@@ -143,7 +143,7 @@ func (d *ZLMDriver) Setup(ctx context.Context, ms *MediaServer, webhookURL strin
 		HookOnPlay:                     new(fmt.Sprintf("%s/on_play", webhookURL)),
 		HookOnPublish:                  new(fmt.Sprintf("%s/on_publish", webhookURL)),
 		HookOnStreamNoneReader:         new(fmt.Sprintf("%s/on_stream_none_reader", webhookURL)),
-		GeneralStreamNoneReaderDelayMS: new("30000"),
+		GeneralStreamNoneReaderDelayMS: new("60000"),
 		HookOnStreamNotFound:           new(fmt.Sprintf("%s/on_stream_not_found", webhookURL)),
 		HookOnRecordTs:                 new(""),
 		HookOnRecordMp4:                new(fmt.Sprintf("%s/on_record_mp4", webhookURL)),

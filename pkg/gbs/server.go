@@ -91,7 +91,7 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 	msg.Handle("DeviceInfo", api.sipMessageDeviceInfo)
 	msg.Handle("ConfigDownload", api.sipMessageConfigDownload)
 	msg.Handle("DeviceConfig", api.handleDeviceConfig)
-	// msg.Handle("RecordInfo", api.handlerMessage)
+	msg.Handle("RecordInfo", api.sipMessageRecordInfo)
 
 	c := Server{
 		Server:       svr,

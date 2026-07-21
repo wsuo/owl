@@ -3,6 +3,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -110,6 +111,41 @@ type setRecordModeWithIDInput struct {
 	Mode string `json:"mode" binding:"omitempty,oneof=always ai none"`
 }
 
+type sdRecordingControlWithIDInput struct {
+	ID     string `uri:"id" binding:"required"`
+	Action string `json:"action" binding:"required,oneof=start stop"`
+}
+
+type sdRecordingsWithIDInput struct {
+	ID    string `uri:"id" binding:"required"`
+	Start int64  `form:"start" binding:"required"`
+	End   int64  `form:"end" binding:"required"`
+}
+
+type presetControlWithIDInput struct {
+	ID     string `uri:"id" binding:"required"`
+	Action string `json:"action" binding:"required,oneof=set call delete"`
+	Index  int    `json:"index" binding:"required,min=1,max=255"`
+}
+
+type sdPlaybackWithIDInput struct {
+	ID    string `uri:"id" binding:"required"`
+	Start int64  `json:"start" binding:"required"`
+	End   int64  `json:"end" binding:"required"`
+}
+
+type stopSDPlaybackInput struct {
+	ID        string `uri:"id" binding:"required"`
+	SessionID string `uri:"session_id" binding:"required"`
+}
+
+type sdPlaybackOutput struct {
+	SessionID string               `json:"session_id"`
+	App       string               `json:"app"`
+	Stream    string               `json:"stream"`
+	Items     []sms.StreamLiveAddr `json:"items"`
+}
+
 // ptzControlWithIDInput 云台控制的请求参数（路径 ID + 请求体）
 type ptzControlWithIDInput struct {
 	ID string `uri:"id" binding:"required"`
@@ -162,9 +198,126 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.POST("/:id/ai/enable", web.WrapH(api.enableAI))        // 启用 AI 检测
 		group.POST("/:id/ai/disable", web.WrapH(api.disableAI))      // 禁用 AI 检测
 		group.POST("/:id/record_mode", web.WrapH(api.setRecordMode)) // 设置录像模式
-		group.POST("/:id/ptz/control", web.WrapH(api.ptzControl))    // 云台控制（所有协议）
-		group.POST("/:id/stop", web.WrapH(api.stopPlay))             // 停止播放（所有协议）
+		group.POST("/:id/sd-recording/control", web.WrapH(api.sdRecordingControl))
+		group.GET("/:id/sd-recordings", web.WrapH(api.sdRecordings))
+		group.POST("/:id/sd-playbacks", web.WrapH(api.startSDPlayback))
+		group.DELETE("/:id/sd-playbacks/:session_id", web.WrapH(api.stopSDPlayback))
+		group.POST("/:id/ptz/control", web.WrapH(api.ptzControl)) // 云台控制（所有协议）
+		group.POST("/:id/ptz/preset", web.WrapH(api.presetControl))
+		group.POST("/:id/stop", web.WrapH(api.stopPlay)) // 停止播放（所有协议）
 	}
+}
+
+func (a IPCAPI) requireGBChannel(ctx context.Context, channelID string) (*ipc.Channel, error) {
+	channel, err := a.ipc.GetChannel(ctx, channelID)
+	if err != nil {
+		return nil, reason.ErrBadRequest.SetMsg("通道不存在")
+	}
+	if !channel.IsGB28181() {
+		return nil, reason.ErrBadRequest.SetMsg("仅 GB28181 通道支持此操作")
+	}
+	if !channel.IsOnline {
+		return nil, reason.ErrBadRequest.SetMsg("通道离线")
+	}
+	return channel, nil
+}
+
+func (a IPCAPI) sdRecordingControl(c *gin.Context, in *sdRecordingControlWithIDInput) (gin.H, error) {
+	channel, err := a.requireGBChannel(c.Request.Context(), in.ID)
+	if err != nil {
+		return nil, err
+	}
+	action, err := gbs.NormalizeRecordingAction(in.Action)
+	if err != nil {
+		return nil, reason.ErrBadRequest.SetMsg(err.Error())
+	}
+	if err := a.uc.SipServer.ControlSDRecording(channel, action); err != nil {
+		return nil, err
+	}
+	return gin.H{"accepted": true, "action": in.Action}, nil
+}
+
+func (a IPCAPI) sdRecordings(c *gin.Context, in *sdRecordingsWithIDInput) (gin.H, error) {
+	channel, err := a.requireGBChannel(c.Request.Context(), in.ID)
+	if err != nil {
+		return nil, err
+	}
+	start, end := time.Unix(in.Start, 0), time.Unix(in.End, 0)
+	if !end.After(start) || end.Sub(start) > 7*24*time.Hour {
+		return nil, reason.ErrBadRequest.SetMsg("录像查询时间范围必须大于 0 且不超过 7 天")
+	}
+	items, err := a.uc.SipServer.QuerySDRecordings(channel, start, end)
+	if err != nil {
+		if errors.Is(err, gbs.ErrSDRecordingQueryTimeout) {
+			return nil, reason.ErrTimeout.SetHTTPStatus(504).SetMsg("录像查询超时")
+		}
+		return nil, err
+	}
+	return gin.H{"items": items, "total": len(items)}, nil
+}
+
+func (a IPCAPI) presetControl(c *gin.Context, in *presetControlWithIDInput) (gin.H, error) {
+	channel, err := a.requireGBChannel(c.Request.Context(), in.ID)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.uc.SipServer.Preset(channel.DeviceID, channel.ChannelID, in.Action, in.Index); err != nil {
+		return nil, err
+	}
+	return gin.H{"accepted": true, "action": in.Action, "index": in.Index}, nil
+}
+
+func (a IPCAPI) startSDPlayback(c *gin.Context, in *sdPlaybackWithIDInput) (*sdPlaybackOutput, error) {
+	channel, err := a.requireGBChannel(c.Request.Context(), in.ID)
+	if err != nil {
+		return nil, err
+	}
+	start, end := time.Unix(in.Start, 0), time.Unix(in.End, 0)
+	if !end.After(start) || end.Sub(start) > 7*24*time.Hour {
+		return nil, reason.ErrBadRequest.SetMsg("回放时间范围必须大于 0 且不超过 7 天")
+	}
+	mediaServer, err := a.uc.SMSAPI.smsCore.GetMediaServer(c.Request.Context(), sms.DefaultMediaServerID)
+	if err != nil {
+		return nil, err
+	}
+	device, err := a.ipc.GetDevice(c.Request.Context(), channel.DID)
+	if err != nil {
+		return nil, err
+	}
+	session, err := a.uc.SipServer.StartSDPlayback(&gbs.SDPlaybackInput{
+		Channel: channel, SMS: mediaServer, StreamMode: device.StreamMode,
+		SessionID: uuid.NewString(), Start: start, End: end,
+	})
+	if err != nil {
+		return nil, err
+	}
+	host := c.Request.Host
+	if parts := strings.Split(c.Request.Host, ":"); len(parts) == 2 {
+		host = parts[0]
+	}
+	prefix := c.Request.Header.Get("X-Forwarded-Prefix")
+	if prefix == "" {
+		prefix = "http://" + host + ":" + strconv.Itoa(a.uc.Conf.Server.HTTP.Port)
+	}
+	if forwarded := c.Request.Header.Get("X-Forwarded-Host"); forwarded != "" {
+		host = forwarded
+	}
+	item := a.uc.SMSAPI.smsCore.GetStreamLiveAddr(mediaServer, prefix, host, session.App, session.Stream)
+	return &sdPlaybackOutput{SessionID: session.ID, App: session.App, Stream: session.Stream, Items: []sms.StreamLiveAddr{item}}, nil
+}
+
+func (a IPCAPI) stopSDPlayback(c *gin.Context, in *stopSDPlaybackInput) (gin.H, error) {
+	if _, err := a.requireGBChannel(c.Request.Context(), in.ID); err != nil {
+		return nil, err
+	}
+	mediaServer, err := a.uc.SMSAPI.smsCore.GetMediaServer(c.Request.Context(), sms.DefaultMediaServerID)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.uc.SipServer.StopSDPlayback(in.SessionID, in.ID, mediaServer); err != nil {
+		return nil, err
+	}
+	return gin.H{"status": "ok"}, nil
 }
 
 // >>> device >>>>>>>>>>>>>>>>>>>>
