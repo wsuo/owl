@@ -25,6 +25,13 @@ func TestBuildSDRecordingControlXML(t *testing.T) {
 	}
 }
 
+func TestRecordInfoQueriesAllRecordingTypes(t *testing.T) {
+	body := string(sip.GetRecordInfoXML("34020000001320000001", 123456, 1_721_536_200, 1_721_536_800))
+	if !strings.Contains(body, "<Type>all</Type>") {
+		t.Fatalf("record query must include manual recordings: %s", body)
+	}
+}
+
 func TestPendingSDRecordingQueryFragmentsEmptyAndTimeout(t *testing.T) {
 	pending := &pendingSDRecordingQuery{expected: -1, done: make(chan struct{})}
 	pending.append(2, []SDRecordingSegment{{StartTime: "2026-07-21T09:00:00"}})

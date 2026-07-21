@@ -94,7 +94,7 @@ var (
 <StartTime>%s</StartTime>
 <EndTime>%s</EndTime>
 <Secrecy>0</Secrecy>
-<Type>time</Type>
+<Type>all</Type>
 </Query>
 `
 	// DeviceInfoXML 查询设备详情xml样式
