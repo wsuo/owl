@@ -93,6 +93,7 @@ func NewServer(cfg *conf.Bootstrap, store ipc.Adapter, sc sms.Core) (*Server, fu
 	msg.Handle("DeviceConfig", api.handleDeviceConfig)
 	msg.Handle("RecordInfo", api.sipMessageRecordInfo)
 	msg.Handle("PresetQuery", api.sipMessagePresetQuery)
+	msg.Handle("DeviceStatus", api.sipMessageDeviceStatus)
 
 	c := Server{
 		Server:       svr,

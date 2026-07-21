@@ -205,6 +205,7 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.POST("/:id/ptz/control", web.WrapH(api.ptzControl)) // 云台控制（所有协议）
 		group.POST("/:id/ptz/preset", web.WrapH(api.presetControl))
 		group.GET("/:id/ptz/presets", web.WrapH(api.queryPresets))
+		group.GET("/:id/device-status", web.WrapH(api.queryDeviceStatus))
 		group.POST("/:id/stop", web.WrapH(api.stopPlay)) // 停止播放（所有协议）
 	}
 }
@@ -281,6 +282,21 @@ func (a IPCAPI) queryPresets(c *gin.Context, in *channelIDInput) (gin.H, error) 
 		return nil, err
 	}
 	return gin.H{"items": items, "total": len(items)}, nil
+}
+
+func (a IPCAPI) queryDeviceStatus(c *gin.Context, in *channelIDInput) (*gbs.DeviceStatus, error) {
+	channel, err := a.requireGBChannel(c.Request.Context(), in.ID)
+	if err != nil {
+		return nil, err
+	}
+	status, err := a.uc.SipServer.QueryDeviceStatus(channel)
+	if err != nil {
+		if errors.Is(err, gbs.ErrDeviceStatusQueryTimeout) {
+			return nil, reason.ErrTimeout.SetHTTPStatus(504).SetMsg("设备状态查询超时")
+		}
+		return nil, err
+	}
+	return status, nil
 }
 
 func (a IPCAPI) startSDPlayback(c *gin.Context, in *sdPlaybackWithIDInput) (*sdPlaybackOutput, error) {

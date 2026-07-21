@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gowvp/owl/pkg/gbs/sip"
 )
 
 func TestBuildSDRecordingControlXML(t *testing.T) {
@@ -105,5 +107,36 @@ func TestBuildPresetQueryXML(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected %q in %s", want, got)
 		}
+	}
+}
+
+func TestBuildDeviceStatusQueryXML(t *testing.T) {
+	body, err := buildDeviceStatusQueryXML("34020000001320000001", 123456)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"<Query>",
+		"<CmdType>DeviceStatus</CmdType>",
+		"<SN>123456</SN>",
+		"<DeviceID>34020000001320000001</DeviceID>",
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("expected %q in XML:\n%s", want, body)
+		}
+	}
+}
+
+func TestDeviceStatusResponseFields(t *testing.T) {
+	body := []byte(`<?xml version="1.0" encoding="GB2312"?>
+<Response><CmdType>DeviceStatus</CmdType><SN>123456</SN>
+<DeviceID>34020000001320000001</DeviceID><Result>OK</Result>
+<Online>ONLINE</Online><Status>OK</Status><Encode>ON</Encode><Record>OFF</Record></Response>`)
+	var status DeviceStatus
+	if err := sip.XMLDecode(body, &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.Record != "OFF" || status.Encode != "ON" || status.Online != "ONLINE" {
+		t.Fatalf("unexpected status: %+v", status)
 	}
 }

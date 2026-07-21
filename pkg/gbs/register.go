@@ -26,10 +26,11 @@ type GB28181API struct {
 	catalog *sip.Collector[Channels]
 
 	// TODO: 待替换成 redis
-	streams            *conc.Map[string, *Streams]
-	sdPlaybacks        *conc.Map[string, *SDPlaybackSession]
-	sdRecordingQueries sync.Map
-	presetQueries      sync.Map
+	streams             *conc.Map[string, *Streams]
+	sdPlaybacks         *conc.Map[string, *SDPlaybackSession]
+	sdRecordingQueries  sync.Map
+	presetQueries       sync.Map
+	deviceStatusQueries sync.Map
 
 	svr *Server
 
