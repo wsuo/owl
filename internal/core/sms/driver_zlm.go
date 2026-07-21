@@ -135,10 +135,12 @@ func (d *ZLMDriver) Setup(ctx context.Context, ms *MediaServer, webhookURL strin
 		HookEnable:           new("1"),
 		HookOnFlowReport:     new(""),
 
-		ProtocolEnableTs:      new("0"),
-		ProtocolEnableFmp4:    new("0"),
-		ProtocolEnableHls:     new("0"),
-		ProtocolEnableHlsFmp4: new("1"),
+		ProtocolEnableTs:   new("0"),
+		ProtocolEnableFmp4: new("0"),
+		ProtocolEnableHls:  new("0"),
+		// HLS-fMP4 会把 init.mp4、分片 MP4 和 m3u8 写入 www/rtp。
+		// 本平台只通过 WebRTC/FLV 转发媒体，服务器禁止保存任何视频文件。
+		ProtocolEnableHlsFmp4: new("0"),
 
 		HookOnPlay:                     new(fmt.Sprintf("%s/on_play", webhookURL)),
 		HookOnPublish:                  new(fmt.Sprintf("%s/on_publish", webhookURL)),
