@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"sync/atomic"
 
@@ -100,12 +101,16 @@ func BuildContinuousMove(direction string, speed float64) string {
 		direction: 0x00,
 	}
 
-	speedByte := uint8(speed * 255)
-	if speedByte == 0 {
-		speedByte = 128 // 默认速度，与其他平台保持一致
+	if speed <= 0 {
+		speed = 0.5
 	}
-	// 强制使用 0x80 (128) 作为速度值，与其他平台完全一致
-	speedByte = 0x80
+	if speed > 1 {
+		speed = 1
+	}
+	speedByte := uint8(math.Round(speed * 255))
+	if speedByte == 0 {
+		speedByte = 1
+	}
 
 	// 根据方向设置字节4的Bit位和对应的速度
 	switch direction {
@@ -144,13 +149,13 @@ func BuildContinuousMove(direction string, speed float64) string {
 	case "zoomin":
 		builder.direction = PTZ_BIT_ZOOM_IN
 		builder.zoomSpeed = speedByte >> 4 // 高4位
-		builder.horzSpeed = 0x00       
-		builder.vertSpeed = 0x00 
+		builder.horzSpeed = 0x00
+		builder.vertSpeed = 0x00
 	case "zoomout":
 		builder.direction = PTZ_BIT_ZOOM_OUT
 		builder.zoomSpeed = speedByte >> 4 // 高4位
-		builder.horzSpeed = 0x00       
-		builder.vertSpeed = 0x00 
+		builder.horzSpeed = 0x00
+		builder.vertSpeed = 0x00
 	default:
 		return ""
 	}
@@ -160,14 +165,11 @@ func BuildContinuousMove(direction string, speed float64) string {
 
 // BuildStop 构建停止命令
 func BuildStop() string {
-	builder := &PTZCmdBuilder{
-		address:   0x01,
-		direction: 0x00, // 所有方向为0表示停止
-		horzSpeed: 0x00,
-		vertSpeed: 0x00,
-		zoomSpeed: 0x00,
+	cmd := []byte{0xA5, 0x0F, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00}
+	for _, value := range cmd[:7] {
+		cmd[7] += value
 	}
-	return builder.build()
+	return hex.EncodeToString(cmd)
 }
 
 // build 构建最终的云台控制码（8字节十六进制字符串）
@@ -191,12 +193,8 @@ func (p *PTZCmdBuilder) build() string {
 	// 字节6: 垂直速度
 	byte6 := p.vertSpeed
 
-	// 字节7: 变倍速度(高4位) + 地址(低4位)
-	// 即使不变倍，也设置一个默认值（与其他平台保持一致）
+	// 字节7: 变倍速度(高4位) + 地址(低4位)。非变倍命令保持为 0。
 	byte7 := (p.zoomSpeed << 4) | 0x00
-	if byte7 == 0 {
-		byte7 = 0x80 // 默认值，与其他平台一致
-	}
 
 	// 调试日志
 	slog.Info("PTZ命令构建详情",
