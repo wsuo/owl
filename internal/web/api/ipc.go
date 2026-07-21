@@ -128,6 +128,13 @@ type presetControlWithIDInput struct {
 	Index  int    `json:"index" binding:"required,min=1,max=255"`
 }
 
+type ptzPreciseMoveWithIDInput struct {
+	ID   string   `uri:"id" binding:"required"`
+	Pan  *float64 `json:"pan"`
+	Tilt *float64 `json:"tilt"`
+	Zoom *float64 `json:"zoom"`
+}
+
 type sdPlaybackWithIDInput struct {
 	ID    string `uri:"id" binding:"required"`
 	Start int64  `json:"start" binding:"required"`
@@ -205,6 +212,8 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.POST("/:id/ptz/control", web.WrapH(api.ptzControl)) // 云台控制（所有协议）
 		group.POST("/:id/ptz/preset", web.WrapH(api.presetControl))
 		group.GET("/:id/ptz/presets", web.WrapH(api.queryPresets))
+		group.GET("/:id/ptz/status", web.WrapH(api.queryPTZPosition))
+		group.POST("/:id/ptz/move", web.WrapH(api.movePTZPrecise))
 		group.GET("/:id/device-status", web.WrapH(api.queryDeviceStatus))
 		group.POST("/:id/stop", web.WrapH(api.stopPlay)) // 停止播放（所有协议）
 	}
@@ -282,6 +291,32 @@ func (a IPCAPI) queryPresets(c *gin.Context, in *channelIDInput) (gin.H, error) 
 		return nil, err
 	}
 	return gin.H{"items": items, "total": len(items)}, nil
+}
+
+func (a IPCAPI) queryPTZPosition(c *gin.Context, in *channelIDInput) (*gbs.PTZPosition, error) {
+	channel, err := a.requireGBChannel(c.Request.Context(), in.ID)
+	if err != nil {
+		return nil, err
+	}
+	position, err := a.uc.SipServer.QueryPTZPosition(channel)
+	if err != nil {
+		if errors.Is(err, gbs.ErrPTZPositionQueryTimeout) {
+			return nil, reason.ErrTimeout.SetHTTPStatus(504).SetMsg("PTZ 位置查询超时")
+		}
+		return nil, err
+	}
+	return position, nil
+}
+
+func (a IPCAPI) movePTZPrecise(c *gin.Context, in *ptzPreciseMoveWithIDInput) (gin.H, error) {
+	channel, err := a.requireGBChannel(c.Request.Context(), in.ID)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.uc.SipServer.MovePTZPrecise(channel, in.Pan, in.Tilt, in.Zoom); err != nil {
+		return nil, reason.ErrBadRequest.SetMsg(err.Error())
+	}
+	return gin.H{"accepted": true}, nil
 }
 
 func (a IPCAPI) queryDeviceStatus(c *gin.Context, in *channelIDInput) (*gbs.DeviceStatus, error) {
