@@ -89,3 +89,21 @@ func TestBuildPresetCommand(t *testing.T) {
 		t.Fatal("expected range error")
 	}
 }
+
+func TestBuildPresetQueryXML(t *testing.T) {
+	body, err := buildPresetQueryXML("34020000001320000001", 654321)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(body)
+	for _, want := range []string{
+		"<Query>",
+		"<CmdType>PresetQuery</CmdType>",
+		"<SN>654321</SN>",
+		"<DeviceID>34020000001320000001</DeviceID>",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in %s", want, got)
+		}
+	}
+}

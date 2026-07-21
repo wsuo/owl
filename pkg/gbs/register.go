@@ -29,6 +29,7 @@ type GB28181API struct {
 	streams            *conc.Map[string, *Streams]
 	sdPlaybacks        *conc.Map[string, *SDPlaybackSession]
 	sdRecordingQueries sync.Map
+	presetQueries      sync.Map
 
 	svr *Server
 
