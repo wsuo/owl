@@ -25,6 +25,7 @@ const (
 var (
 	ErrRecordingConfigTimeout  = errors.New("recording config response timeout")
 	ErrRecordingConfigRejected = errors.New("recording config rejected")
+	ErrRecordingConfigEmpty    = errors.New("recording config response is empty")
 	ErrSDCardStatusTimeout     = errors.New("sd card status response timeout")
 	ErrSDCardStatusRejected    = errors.New("sd card status rejected")
 )
@@ -95,6 +96,15 @@ type pendingConfigResponse struct {
 	Plan       *VideoRecordPlan
 	Alarm      *VideoAlarmRecord
 	Report     *AlarmReport
+}
+
+func (r pendingConfigResponse) empty() bool {
+	return r.Plan == nil && r.Alarm == nil && r.Report == nil
+}
+
+type pendingConfigQuery struct {
+	ConfigType string
+	Done       chan pendingConfigResponse
 }
 
 type CapabilityState struct {
@@ -273,19 +283,21 @@ func configKey(sourceDeviceID, targetDeviceID string, sn int) string {
 	return fmt.Sprintf("%s:%s:%d", sourceDeviceID, targetDeviceID, sn)
 }
 
-func configQueryKey(sourceDeviceID, targetDeviceID string, sn int, configType string) string {
-	return fmt.Sprintf("%s:%s:%d:%s", sourceDeviceID, targetDeviceID, sn, configType)
-}
-
 func (s *Server) QueryRecordingConfig(channel *ipc.Channel, configType string) (*pendingConfigResponse, error) {
 	dev, ok := s.memoryStorer.Load(channel.DeviceID)
 	if !ok || !dev.IsOnline || dev.conn == nil {
 		return nil, ErrDeviceOffline
 	}
-	sn := sip.RandInt(100000, 999999)
-	key := configQueryKey(channel.DeviceID, channel.ChannelID, sn, configType)
-	done := make(chan pendingConfigResponse, 1)
-	s.gb.configQueries.Store(key, done)
+	var sn int
+	var key string
+	query := &pendingConfigQuery{ConfigType: configType, Done: make(chan pendingConfigResponse, 1)}
+	for {
+		sn = sip.RandInt(100000, 999999)
+		key = configKey(channel.DeviceID, channel.ChannelID, sn)
+		if _, loaded := s.gb.configQueries.LoadOrStore(key, query); !loaded {
+			break
+		}
+	}
 	defer s.gb.configQueries.Delete(key)
 	body, err := sip.XMLEncode(configDownloadRequest{CmdType: "ConfigDownload", SN: sn, DeviceID: channel.ChannelID, ConfigType: configType})
 	if err != nil {
@@ -299,9 +311,12 @@ func (s *Server) QueryRecordingConfig(channel *ipc.Channel, configType string) (
 		return nil, err
 	}
 	select {
-	case response := <-done:
+	case response := <-query.Done:
 		if !strings.EqualFold(response.Result, "OK") {
 			return nil, fmt.Errorf("%w: %s query: %s", ErrRecordingConfigRejected, configType, response.Result)
+		}
+		if response.empty() {
+			return nil, fmt.Errorf("%w: %s", ErrRecordingConfigEmpty, configType)
 		}
 		return &response, nil
 	case <-time.After(10 * time.Second):
@@ -355,16 +370,18 @@ func (g *GB28181API) resolveConfigQuery(sourceDeviceID string, msg ConfigDownloa
 	case msg.AlarmReport != nil:
 		configType = ConfigAlarmReport
 	}
-	if configType == "" {
+	value, ok := g.configQueries.Load(configKey(sourceDeviceID, msg.DeviceID, msg.SN))
+	if !ok {
 		return
 	}
-	key := configQueryKey(sourceDeviceID, msg.DeviceID, msg.SN, configType)
-	if value, ok := g.configQueries.Load(key); ok {
-		response := pendingConfigResponse{ConfigType: configType, Result: msg.Result, Plan: msg.VideoRecordPlan, Alarm: msg.VideoAlarmRecord, Report: msg.AlarmReport}
-		select {
-		case value.(chan pendingConfigResponse) <- response:
-		default:
-		}
+	query := value.(*pendingConfigQuery)
+	if configType != "" && configType != query.ConfigType {
+		return
+	}
+	response := pendingConfigResponse{ConfigType: query.ConfigType, Result: msg.Result, Plan: msg.VideoRecordPlan, Alarm: msg.VideoAlarmRecord, Report: msg.AlarmReport}
+	select {
+	case query.Done <- response:
+	default:
 	}
 }
 

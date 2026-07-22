@@ -274,6 +274,9 @@ func (a IPCAPI) sdCardStatus(c *gin.Context, in *channelIDInput) (gin.H, error) 
 	if errors.Is(err, gbs.ErrSDCardStatusTimeout) {
 		return nil, reason.ErrTimeout.SetHTTPStatus(504).SetMsg("存储卡状态查询超时")
 	}
+	if errors.Is(err, gbs.ErrSDCardStatusRejected) {
+		return nil, reason.ErrServiceUnavailable.SetHTTPStatus(502).SetMsg("设备拒绝存储卡状态查询")
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -286,11 +289,8 @@ func (a IPCAPI) getRecordingPlan(c *gin.Context, in *channelIDInput) (*gbs.Video
 		return nil, err
 	}
 	response, err := a.uc.SipServer.QueryRecordingConfig(channel, gbs.ConfigVideoRecordPlan)
-	if errors.Is(err, gbs.ErrRecordingConfigTimeout) {
-		return nil, reason.ErrTimeout.SetHTTPStatus(504).SetMsg("录像计划查询超时")
-	}
 	if err != nil {
-		return nil, err
+		return nil, recordingConfigError(err, "录像计划查询超时")
 	}
 	if response.Plan == nil {
 		return nil, reason.ErrNotFound.SetMsg("设备未返回录像计划")
@@ -301,6 +301,12 @@ func (a IPCAPI) getRecordingPlan(c *gin.Context, in *channelIDInput) (*gbs.Video
 func recordingConfigError(err error, message string) error {
 	if errors.Is(err, gbs.ErrRecordingConfigTimeout) {
 		return reason.ErrTimeout.SetHTTPStatus(504).SetMsg(message)
+	}
+	if errors.Is(err, gbs.ErrRecordingConfigEmpty) {
+		return reason.ErrServiceUnavailable.SetHTTPStatus(502).SetMsg("设备返回的录像配置为空")
+	}
+	if errors.Is(err, gbs.ErrRecordingConfigRejected) {
+		return reason.ErrServiceUnavailable.SetHTTPStatus(502).SetMsg("设备拒绝录像配置请求")
 	}
 	return err
 }

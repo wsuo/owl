@@ -3,9 +3,51 @@ package gbs
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gowvp/owl/pkg/gbs/sip"
 )
+
+func TestResolveConfigQueryCorrelatesEmptyResponseWithPendingType(t *testing.T) {
+	api := &GB28181API{}
+	query := &pendingConfigQuery{ConfigType: ConfigVideoRecordPlan, Done: make(chan pendingConfigResponse, 1)}
+	api.configQueries.Store(configKey("device-1", "channel-1", 123), query)
+
+	api.resolveConfigQuery("device-1", ConfigDownloadResponse{
+		SN: 123, DeviceID: "channel-1", Result: "OK",
+	})
+
+	select {
+	case response := <-query.Done:
+		if response.ConfigType != ConfigVideoRecordPlan || response.Plan != nil {
+			t.Fatalf("unexpected response: %#v", response)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("empty response was not correlated")
+	}
+}
+
+func TestResolveConfigQueryRejectsMismatchedPayloadType(t *testing.T) {
+	api := &GB28181API{}
+	query := &pendingConfigQuery{ConfigType: ConfigVideoRecordPlan, Done: make(chan pendingConfigResponse, 1)}
+	api.configQueries.Store(configKey("device-1", "channel-1", 456), query)
+
+	api.resolveConfigQuery("device-1", ConfigDownloadResponse{
+		SN: 456, DeviceID: "channel-1", Result: "OK", VideoAlarmRecord: &VideoAlarmRecord{},
+	})
+
+	select {
+	case response := <-query.Done:
+		t.Fatalf("mismatched response was correlated: %#v", response)
+	default:
+	}
+}
+
+func TestEmptyRecordingConfigHasDedicatedError(t *testing.T) {
+	if !(pendingConfigResponse{ConfigType: ConfigVideoRecordPlan, Result: "OK"}).empty() {
+		t.Fatal("expected response without a config payload to be empty")
+	}
+}
 
 func fullDaySegment() TimeSegment {
 	return TimeSegment{StartHour: 0, StopHour: 23, StopMin: 59, StopSec: 59}
