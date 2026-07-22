@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -58,10 +59,18 @@ type IPCAPI struct {
 	ipc           ipc.Core
 	uc            *Usecase
 	recordingCore recording.Core
+	configLocks   *sync.Map
 }
 
 func NewIPCAPI(bundle IPCBundle, recordingCore recording.Core) IPCAPI {
-	return IPCAPI{ipc: bundle.Core, recordingCore: recordingCore}
+	return IPCAPI{ipc: bundle.Core, recordingCore: recordingCore, configLocks: &sync.Map{}}
+}
+
+func (a IPCAPI) lockRecordingConfig(channelID string) func() {
+	value, _ := a.configLocks.LoadOrStore(channelID, &sync.Mutex{})
+	mutex := value.(*sync.Mutex)
+	mutex.Lock()
+	return mutex.Unlock
 }
 
 // deviceIDInput 设备 ID 路径参数
@@ -141,6 +150,26 @@ type sdPlaybackWithIDInput struct {
 	End   int64  `json:"end" binding:"required"`
 }
 
+type recordingPlanWithIDInput struct {
+	ID string `uri:"id" binding:"required"`
+	gbs.VideoRecordPlan
+}
+
+type alarmRecordingWithIDInput struct {
+	ID string `uri:"id" binding:"required"`
+	gbs.VideoAlarmRecord
+}
+
+type alarmReportWithIDInput struct {
+	ID string `uri:"id" binding:"required"`
+	gbs.AlarmReport
+}
+
+type alarmEventsWithIDInput struct {
+	ID    string `uri:"id" binding:"required"`
+	Since int64  `form:"since"`
+}
+
 type stopSDPlaybackInput struct {
 	ID        string `uri:"id" binding:"required"`
 	SessionID string `uri:"session_id" binding:"required"`
@@ -215,8 +244,205 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.GET("/:id/ptz/status", web.WrapH(api.queryPTZPosition))
 		group.POST("/:id/ptz/move", web.WrapH(api.movePTZPrecise))
 		group.GET("/:id/device-status", web.WrapH(api.queryDeviceStatus))
+		group.GET("/:id/recording/capabilities", web.WrapH(api.recordingCapabilities))
+		group.GET("/:id/sd-card", web.WrapH(api.sdCardStatus))
+		group.GET("/:id/recording-plan", web.WrapH(api.getRecordingPlan))
+		group.PUT("/:id/recording-plan", web.WrapH(api.putRecordingPlan))
+		group.GET("/:id/alarm-recording", web.WrapH(api.getAlarmRecording))
+		group.PUT("/:id/alarm-recording", web.WrapH(api.putAlarmRecording))
+		group.GET("/:id/alarm-report", web.WrapH(api.getAlarmReport))
+		group.PUT("/:id/alarm-report", web.WrapH(api.putAlarmReport))
+		group.GET("/:id/alarm-events", web.WrapH(api.alarmEvents))
 		group.POST("/:id/stop", web.WrapH(api.stopPlay)) // 停止播放（所有协议）
 	}
+}
+
+func (a IPCAPI) recordingCapabilities(c *gin.Context, in *channelIDInput) (gbs.RecordingCapabilities, error) {
+	channel, err := a.requireGBChannel(c.Request.Context(), in.ID)
+	if err != nil {
+		return gbs.RecordingCapabilities{}, err
+	}
+	return a.uc.SipServer.ProbeRecordingCapabilities(channel), nil
+}
+
+func (a IPCAPI) sdCardStatus(c *gin.Context, in *channelIDInput) (gin.H, error) {
+	channel, err := a.requireGBChannel(c.Request.Context(), in.ID)
+	if err != nil {
+		return nil, err
+	}
+	items, err := a.uc.SipServer.QuerySDCardStatus(channel)
+	if errors.Is(err, gbs.ErrSDCardStatusTimeout) {
+		return nil, reason.ErrTimeout.SetHTTPStatus(504).SetMsg("存储卡状态查询超时")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return gin.H{"items": items, "total": len(items)}, nil
+}
+
+func (a IPCAPI) getRecordingPlan(c *gin.Context, in *channelIDInput) (*gbs.VideoRecordPlan, error) {
+	channel, err := a.requireGBChannel(c.Request.Context(), in.ID)
+	if err != nil {
+		return nil, err
+	}
+	response, err := a.uc.SipServer.QueryRecordingConfig(channel, gbs.ConfigVideoRecordPlan)
+	if errors.Is(err, gbs.ErrRecordingConfigTimeout) {
+		return nil, reason.ErrTimeout.SetHTTPStatus(504).SetMsg("录像计划查询超时")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if response.Plan == nil {
+		return nil, reason.ErrNotFound.SetMsg("设备未返回录像计划")
+	}
+	return response.Plan, nil
+}
+
+func recordingConfigError(err error, message string) error {
+	if errors.Is(err, gbs.ErrRecordingConfigTimeout) {
+		return reason.ErrTimeout.SetHTTPStatus(504).SetMsg(message)
+	}
+	return err
+}
+
+func (a IPCAPI) putRecordingPlan(c *gin.Context, in *recordingPlanWithIDInput) (*gbs.VideoRecordPlan, error) {
+	channel, err := a.requireGBChannel(c.Request.Context(), in.ID)
+	if err != nil {
+		return nil, err
+	}
+	unlock := a.lockRecordingConfig(channel.ID)
+	defer unlock()
+	plan := in.VideoRecordPlan
+	if err := gbs.ValidateVideoRecordPlan(&plan); err != nil {
+		return nil, reason.ErrBadRequest.SetHTTPStatus(422).SetMsg(err.Error())
+	}
+	original, err := a.uc.SipServer.QueryRecordingConfig(channel, gbs.ConfigVideoRecordPlan)
+	if err != nil {
+		return nil, recordingConfigError(err, "原录像计划读取失败")
+	}
+	if original.Plan == nil {
+		return nil, reason.ErrBadRequest.SetMsg("设备未返回原录像计划")
+	}
+	if err := a.uc.SipServer.SetRecordingConfig(channel, gbs.ConfigVideoRecordPlan, &plan); err != nil {
+		return nil, recordingConfigError(err, "录像计划配置超时")
+	}
+	response, err := a.uc.SipServer.QueryRecordingConfig(channel, gbs.ConfigVideoRecordPlan)
+	if err != nil {
+		_ = a.uc.SipServer.SetRecordingConfig(channel, gbs.ConfigVideoRecordPlan, original.Plan)
+		return nil, recordingConfigError(err, "录像计划回读超时")
+	}
+	if response.Plan == nil {
+		_ = a.uc.SipServer.SetRecordingConfig(channel, gbs.ConfigVideoRecordPlan, original.Plan)
+		return nil, reason.ErrBadRequest.SetMsg("录像计划写入后无法回读")
+	}
+	if !gbs.RecordingConfigEqual(gbs.ConfigVideoRecordPlan, &plan, response.Plan) {
+		if rollbackErr := a.uc.SipServer.SetRecordingConfig(channel, gbs.ConfigVideoRecordPlan, original.Plan); rollbackErr != nil {
+			return nil, reason.ErrBadRequest.SetMsg("录像计划回读不一致且原配置恢复失败")
+		}
+		return nil, reason.ErrBadRequest.SetMsg("录像计划写入后回读不一致")
+	}
+	return response.Plan, nil
+}
+
+func (a IPCAPI) getAlarmRecording(c *gin.Context, in *channelIDInput) (*gbs.VideoAlarmRecord, error) {
+	channel, err := a.requireGBChannel(c.Request.Context(), in.ID)
+	if err != nil {
+		return nil, err
+	}
+	response, err := a.uc.SipServer.QueryRecordingConfig(channel, gbs.ConfigVideoAlarmRecord)
+	if err != nil {
+		return nil, recordingConfigError(err, "报警录像查询超时")
+	}
+	return response.Alarm, nil
+}
+
+func (a IPCAPI) putAlarmRecording(c *gin.Context, in *alarmRecordingWithIDInput) (*gbs.VideoAlarmRecord, error) {
+	channel, err := a.requireGBChannel(c.Request.Context(), in.ID)
+	if err != nil {
+		return nil, err
+	}
+	unlock := a.lockRecordingConfig(channel.ID)
+	defer unlock()
+	config := in.VideoAlarmRecord
+	original, err := a.uc.SipServer.QueryRecordingConfig(channel, gbs.ConfigVideoAlarmRecord)
+	if err != nil {
+		return nil, recordingConfigError(err, "原报警录像配置读取失败")
+	}
+	if original.Alarm == nil {
+		return nil, reason.ErrBadRequest.SetMsg("设备未返回原报警录像配置")
+	}
+	if err := a.uc.SipServer.SetRecordingConfig(channel, gbs.ConfigVideoAlarmRecord, &config); err != nil {
+		return nil, recordingConfigError(err, "报警录像配置超时")
+	}
+	response, err := a.uc.SipServer.QueryRecordingConfig(channel, gbs.ConfigVideoAlarmRecord)
+	if err != nil {
+		_ = a.uc.SipServer.SetRecordingConfig(channel, gbs.ConfigVideoAlarmRecord, original.Alarm)
+		return nil, recordingConfigError(err, "报警录像回读超时")
+	}
+	if !gbs.RecordingConfigEqual(gbs.ConfigVideoAlarmRecord, &config, response.Alarm) {
+		if rollbackErr := a.uc.SipServer.SetRecordingConfig(channel, gbs.ConfigVideoAlarmRecord, original.Alarm); rollbackErr != nil {
+			return nil, reason.ErrBadRequest.SetMsg("报警录像回读不一致且原配置恢复失败")
+		}
+		return nil, reason.ErrBadRequest.SetMsg("报警录像配置写入后回读不一致")
+	}
+	return response.Alarm, nil
+}
+
+func (a IPCAPI) getAlarmReport(c *gin.Context, in *channelIDInput) (*gbs.AlarmReport, error) {
+	channel, err := a.requireGBChannel(c.Request.Context(), in.ID)
+	if err != nil {
+		return nil, err
+	}
+	response, err := a.uc.SipServer.QueryRecordingConfig(channel, gbs.ConfigAlarmReport)
+	if err != nil {
+		return nil, recordingConfigError(err, "报警上报查询超时")
+	}
+	return response.Report, nil
+}
+
+func (a IPCAPI) putAlarmReport(c *gin.Context, in *alarmReportWithIDInput) (*gbs.AlarmReport, error) {
+	channel, err := a.requireGBChannel(c.Request.Context(), in.ID)
+	if err != nil {
+		return nil, err
+	}
+	unlock := a.lockRecordingConfig(channel.ID)
+	defer unlock()
+	config := in.AlarmReport
+	original, err := a.uc.SipServer.QueryRecordingConfig(channel, gbs.ConfigAlarmReport)
+	if err != nil {
+		return nil, recordingConfigError(err, "原报警上报配置读取失败")
+	}
+	if original.Report == nil {
+		return nil, reason.ErrBadRequest.SetMsg("设备未返回原报警上报配置")
+	}
+	if err := a.uc.SipServer.SetRecordingConfig(channel, gbs.ConfigAlarmReport, &config); err != nil {
+		return nil, recordingConfigError(err, "报警上报配置超时")
+	}
+	response, err := a.uc.SipServer.QueryRecordingConfig(channel, gbs.ConfigAlarmReport)
+	if err != nil {
+		_ = a.uc.SipServer.SetRecordingConfig(channel, gbs.ConfigAlarmReport, original.Report)
+		return nil, recordingConfigError(err, "报警上报回读超时")
+	}
+	if !gbs.RecordingConfigEqual(gbs.ConfigAlarmReport, &config, response.Report) {
+		if rollbackErr := a.uc.SipServer.SetRecordingConfig(channel, gbs.ConfigAlarmReport, original.Report); rollbackErr != nil {
+			return nil, reason.ErrBadRequest.SetMsg("报警上报回读不一致且原配置恢复失败")
+		}
+		return nil, reason.ErrBadRequest.SetMsg("报警上报配置写入后回读不一致")
+	}
+	return response.Report, nil
+}
+
+func (a IPCAPI) alarmEvents(c *gin.Context, in *alarmEventsWithIDInput) (gin.H, error) {
+	channel, err := a.requireGBChannel(c.Request.Context(), in.ID)
+	if err != nil {
+		return nil, err
+	}
+	since := time.Unix(in.Since, 0)
+	if in.Since == 0 {
+		since = time.Now().Add(-7 * 24 * time.Hour)
+	}
+	items := a.uc.SipServer.AlarmEvents(channel.DeviceID, channel.ChannelID, since)
+	return gin.H{"items": items, "total": len(items)}, nil
 }
 
 func (a IPCAPI) requireGBChannel(ctx context.Context, channelID string) (*ipc.Channel, error) {

@@ -32,6 +32,12 @@ type GB28181API struct {
 	presetQueries       sync.Map
 	ptzPositionQueries  sync.Map
 	deviceStatusQueries sync.Map
+	configQueries       sync.Map
+	configControls      sync.Map
+	sdCardQueries       sync.Map
+	recordingCaps       sync.Map
+	alarmEventsMu       sync.Mutex
+	alarmEvents         []AlarmEvent
 
 	svr *Server
 

@@ -3,7 +3,6 @@ package gbs
 import (
 	"encoding/hex"
 	"encoding/xml"
-	"fmt"
 	"log/slog"
 	"math"
 
@@ -46,12 +45,15 @@ type ConfigDownloadRequest struct {
 }
 
 type ConfigDownloadResponse struct {
-	XMLName    xml.Name    `xml:"Response"`
-	CmdType    string      `xml:"CmdType"`
-	SN         int         `xml:"SN"`
-	DeviceID   string      `xml:"DeviceID"`
-	Result     string      `xml:"Result"`
-	BasicParam *BasicParam `xml:"BasicParam"`
+	XMLName          xml.Name          `xml:"Response"`
+	CmdType          string            `xml:"CmdType"`
+	SN               int               `xml:"SN"`
+	DeviceID         string            `xml:"DeviceID"`
+	Result           string            `xml:"Result"`
+	BasicParam       *BasicParam       `xml:"BasicParam"`
+	VideoRecordPlan  *VideoRecordPlan  `xml:"VideoRecordPlan"`
+	VideoAlarmRecord *VideoAlarmRecord `xml:"VideoAlarmRecord"`
+	AlarmReport      *AlarmReport      `xml:"AlarmReport"`
 	// VideoParamOpt       *VideoParamOpt       `xml:"VideoParamOpt"`
 	// SVACEncodeConfig    *SVACEncodeConfig    `xml:"SVACEncodeConfig"`
 	// SVACDecodeConfig    *SVACDecodeConfig    `xml:"SVACDecodeConfig"`
@@ -111,18 +113,13 @@ func (g *GB28181API) QueryConfigDownloadBasic(deviceID string) error {
 func (g *GB28181API) handleDeviceConfig(ctx *sip.Context) {
 	slog.Debug("handleDeviceConfig", "deviceID", ctx.DeviceID)
 
-	b := ctx.Request.Body()
-	fmt.Println(">>>", string(b))
-	// var msg DeviceConfigResponse
-	// if err := sip.XMLDecode(ctx.Request.Body(), &msg); err != nil {
-	// 	ctx.Log.Error("handleDeviceConfig", "err", err, "body", hex.EncodeToString(ctx.Request.Body()))
-	// 	ctx.String(400, ErrXMLDecode.Error())
-	// 	return
-	// }
-
-	// if msg.SnapShotConfig != nil {
-	// 	slog.Debug("handleDeviceConfig", "snapShotConfig", msg.SnapShotConfig)
-	// }
+	var msg deviceConfigResponse
+	if err := sip.XMLDecode(ctx.Request.Body(), &msg); err != nil {
+		ctx.Log.Error("handleDeviceConfig", "err", err, "body", hex.EncodeToString(ctx.Request.Body()))
+		ctx.String(400, ErrXMLDecode.Error())
+		return
+	}
+	g.resolveConfigControl(ctx.DeviceID, msg)
 
 	ctx.String(200, "OK")
 }
@@ -161,6 +158,7 @@ func (g *GB28181API) sipMessageConfigDownload(ctx *sip.Context) {
 			ctx.Log.Debug("sipMessageConfigDownload update", "deviceID", ctx.DeviceID, "keepaliveInterval", ipc.keepaliveInterval, "keepaliveTimeout", ipc.keepaliveTimeout)
 		}
 	}
+	g.resolveConfigQuery(ctx.DeviceID, msg)
 
 	ctx.String(200, "OK")
 }
