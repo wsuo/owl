@@ -1,6 +1,7 @@
 package gbs
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +47,20 @@ func TestResolveConfigQueryRejectsMismatchedPayloadType(t *testing.T) {
 func TestEmptyRecordingConfigHasDedicatedError(t *testing.T) {
 	if !(pendingConfigResponse{ConfigType: ConfigVideoRecordPlan, Result: "OK"}).empty() {
 		t.Fatal("expected response without a config payload to be empty")
+	}
+}
+
+func TestEmptyAndRejectedRecordingConfigsAreUnsupported(t *testing.T) {
+	for _, err := range []error{
+		fmt.Errorf("%w: empty", ErrRecordingConfigEmpty),
+		fmt.Errorf("%w: rejected", ErrRecordingConfigRejected),
+	} {
+		if !recordingConfigUnsupported(err) {
+			t.Fatalf("expected unsupported error: %v", err)
+		}
+	}
+	if recordingConfigUnsupported(ErrRecordingConfigTimeout) {
+		t.Fatal("timeout must remain unknown")
 	}
 }
 

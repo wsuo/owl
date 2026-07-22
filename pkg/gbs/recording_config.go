@@ -102,6 +102,10 @@ func (r pendingConfigResponse) empty() bool {
 	return r.Plan == nil && r.Alarm == nil && r.Report == nil
 }
 
+func recordingConfigUnsupported(err error) bool {
+	return errors.Is(err, ErrRecordingConfigRejected) || errors.Is(err, ErrRecordingConfigEmpty)
+}
+
 type pendingConfigQuery struct {
 	ConfigType string
 	Done       chan pendingConfigResponse
@@ -534,7 +538,7 @@ func (s *Server) ProbeRecordingCapabilities(channel *ipc.Channel) RecordingCapab
 				mu.Lock()
 				query.state.Status = "supported"
 				mu.Unlock()
-			} else if errors.Is(err, ErrRecordingConfigRejected) {
+			} else if recordingConfigUnsupported(err) {
 				mu.Lock()
 				query.state.Status = "unsupported"
 				mu.Unlock()
