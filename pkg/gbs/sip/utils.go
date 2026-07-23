@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -19,6 +20,8 @@ import (
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
 )
+
+var bareNumericXMLAttribute = regexp.MustCompile(`(\s[A-Za-z_:][A-Za-z0-9_.:-]*\s*=\s*)([0-9]+)(\s|/?>)`)
 
 // Error Error
 type Error struct {
@@ -177,6 +180,9 @@ func XMLDecode(data []byte, v any) error {
 	value := string(data)
 	value = strings.Replace(value, `<?xml version="1.0"?>`, `<?xml version="1.0" encoding="GB2312"?>`, 1)
 	value = strings.Replace(value, `UTF-8`, `GB2312`, 1)
+	// Some cameras emit attributes such as `Num = 1`. XML requires quoted
+	// attribute values, so normalize this common GB28181 device defect.
+	value = bareNumericXMLAttribute.ReplaceAllString(value, `$1"$2"$3`)
 	return xmlDecode([]byte(value), v)
 }
 

@@ -147,3 +147,18 @@ func TestDeviceStatusResponseFields(t *testing.T) {
 		t.Fatalf("unexpected status: %+v", status)
 	}
 }
+
+func TestDeviceStatusResponseAcceptsUnquotedNumericAttribute(t *testing.T) {
+	body := []byte(`<?xml version="1.0" encoding="GB2312"?>
+<Response><CmdType>DeviceStatus</CmdType><SN>123456</SN>
+<DeviceID>34020000001320000001</DeviceID><Result>OK</Result>
+<Online>ONLINE</Online><Status>OK</Status><Encode>ON</Encode><Record>OFF</Record>
+<Alarmstatus Num = 1><Item><DeviceID>34020000001320000001</DeviceID></Item></Alarmstatus></Response>`)
+	var status DeviceStatus
+	if err := sip.XMLDecode(body, &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.Record != "OFF" || status.DeviceID != "34020000001320000001" {
+		t.Fatalf("unexpected status: %+v", status)
+	}
+}
