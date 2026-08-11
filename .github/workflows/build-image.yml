@@ -18,6 +18,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Verify formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Run tests
+        run: go test ./...
+      - name: Run vet
+        run: go vet ./...
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -41,7 +47,8 @@ jobs:
           echo "e29523cc5c797e531ab9e1f27f6d170378c80effcf605feec1d469f26287295f  /tmp/www.zip" | sha256sum --check
           unzip -q /tmp/www.zip -d .
           test -f www/index.html
-      - uses: docker/build-push-action@v6
+      - id: image
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile_zlm
@@ -50,3 +57,11 @@ jobs:
           tags: |
             ghcr.io/wsuo/owl:sha-${{ github.sha }}
             ${{ steps.metadata.outputs.tags }}
+      - name: Save image digest
+        run: |
+          mkdir -p build
+          printf '%s\n' '${{ steps.image.outputs.digest }}' > build/image-digest.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gowvp-image-digest-${{ github.sha }}
+          path: build/image-digest.txt
