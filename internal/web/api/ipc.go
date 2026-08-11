@@ -602,7 +602,15 @@ func (a IPCAPI) startSDPlayback(c *gin.Context, in *sdPlaybackWithIDInput) (*sdP
 	if forwarded := c.Request.Header.Get("X-Forwarded-Host"); forwarded != "" {
 		host = forwarded
 	}
-	item := a.uc.SMSAPI.smsCore.GetStreamLiveAddr(mediaServer, prefix, host, session.App, session.Stream)
+	playToken, err := web.NewToken(
+		map[string]any{"stream": session.Stream, "app": session.App},
+		a.uc.Conf.Server.HTTP.JwtSecret+"_play",
+		web.WithExpiresAt(time.Now().Add(42*time.Hour)),
+	)
+	if err != nil {
+		return nil, reason.ErrServer.WithMsg("生成播放token失败")
+	}
+	item := a.uc.SMSAPI.smsCore.GetStreamLiveAddr(mediaServer, prefix, host, session.App, session.Stream, playToken)
 	return &sdPlaybackOutput{SessionID: session.ID, App: session.App, Stream: session.Stream, Items: []sms.StreamLiveAddr{item}}, nil
 }
 
