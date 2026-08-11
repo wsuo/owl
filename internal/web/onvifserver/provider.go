@@ -19,7 +19,7 @@ type StreamProvider struct {
 	smsCore sms.Core
 	conf    *conf.Bootstrap
 
-	mu      sync.RWMutex
+	mu       sync.RWMutex
 	channels []*ipc.Channel
 	devices  map[string]deviceMeta // DID -> 父设备展示名与在线状态
 }

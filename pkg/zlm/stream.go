@@ -13,9 +13,9 @@ type CloseStreamsRequest struct {
 }
 
 type CloseStreamsResponse struct {
-	Code          int `json:"code"`
-	CountHit      int `json:"count_hit"`      // 筛选命中的流数量
-	CountClosed   int `json:"count_closed"`    // 被关闭的流数量
+	Code        int `json:"code"`
+	CountHit    int `json:"count_hit"`    // 筛选命中的流数量
+	CountClosed int `json:"count_closed"` // 被关闭的流数量
 }
 
 // CloseStreams 关闭流
