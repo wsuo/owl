@@ -28,6 +28,9 @@ func (c Core) ListChannelsForDevice(ctx context.Context, in *FindDeviceInput) ([
 
 	query := orm.NewQuery(3)
 	query.OrderBy("created_at DESC")
+	if in.Key != "" {
+		query.Where("device_id LIKE ? OR name LIKE ?", "%"+in.Key+"%", "%"+in.Key+"%")
+	}
 
 	total, err := c.store.Device().List(ctx, &items, in, query.Encode()...)
 	if err != nil {
@@ -35,11 +38,13 @@ func (c Core) ListChannelsForDevice(ctx context.Context, in *FindDeviceInput) ([
 	}
 
 	for _, item := range items {
-		// 限制查询通道数量
 		const size = 5
 		item.Children = make([]*Channel, 0, size)
-		query := orm.NewQuery(2).OrderBy("created_at ASC").Where("did=?", item.ID)
-		_, err := c.store.Channel().List(ctx, &item.Children, web.PagerFilter{Size: size}, query.Encode()...)
+		chQuery := orm.NewQuery(2).OrderBy("created_at ASC").Where("did=?", item.ID)
+		if in.Key != "" {
+			chQuery.Where("channel_id LIKE ? OR name LIKE ?", "%"+in.Key+"%", "%"+in.Key+"%")
+		}
+		_, err := c.store.Channel().List(ctx, &item.Children, web.PagerFilter{Size: size}, chQuery.Encode()...)
 		if err != nil {
 			continue
 		}
@@ -105,7 +110,7 @@ func (c Core) CreateDevice(ctx context.Context, in *AddDeviceInput) (*Device, er
 	// 协议验证（通过接口调用）
 	if protocol, ok := c.protocols[out.GetType()]; ok {
 		if err := protocol.ValidateDevice(ctx, &out); err != nil {
-			return nil, reason.ErrBadRequest.SetMsg(err.Error())
+			return nil, reason.ErrBadRequest.WithMsg(err.Error())
 		}
 	}
 
@@ -117,13 +122,13 @@ func (c Core) CreateDevice(ctx context.Context, in *AddDeviceInput) (*Device, er
 	}
 
 	if err := out.Check(); err != nil {
-		return nil, reason.ErrBadRequest.SetMsg(err.Error())
+		return nil, reason.ErrBadRequest.WithMsg(err.Error())
 	}
 
 	// 持久化到数据库
 	if err := c.store.Device().Create(ctx, &out); err != nil {
 		if orm.IsDuplicatedKey(err) {
-			return nil, reason.ErrDB.SetMsg("国标 ID 重复，请勿重复添加")
+			return nil, reason.ErrDB.WithMsg("国标 ID 重复，请勿重复添加")
 		}
 		return nil, reason.ErrDB.Withf(`Create err[%s]`, err.Error())
 	}
@@ -131,7 +136,7 @@ func (c Core) CreateDevice(ctx context.Context, in *AddDeviceInput) (*Device, er
 	// 初始化协议连接（失败不影响设备添加）
 	if protocol, ok := c.protocols[out.GetType()]; ok {
 		if err := protocol.InitDevice(ctx, &out); err != nil {
-			return nil, reason.ErrBadRequest.SetMsg(err.Error())
+			return nil, reason.ErrBadRequest.WithMsg(err.Error())
 		}
 	}
 
@@ -200,7 +205,7 @@ func (c Core) QueryCatalog(ctx context.Context, deviceID string) error {
 		return err
 	}
 	if err := c.protocols[device.GetType()].QueryCatalog(ctx, device); err != nil {
-		return reason.ErrBadRequest.SetMsg(err.Error())
+		return reason.ErrBadRequest.WithMsg(err.Error())
 	}
 	return nil
 }

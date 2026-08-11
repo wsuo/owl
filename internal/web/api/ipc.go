@@ -253,7 +253,8 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.GET("/:id/alarm-report", web.WrapH(api.getAlarmReport))
 		group.PUT("/:id/alarm-report", web.WrapH(api.putAlarmReport))
 		group.GET("/:id/alarm-events", web.WrapH(api.alarmEvents))
-		group.POST("/:id/stop", web.WrapH(api.stopPlay)) // 停止播放（所有协议）
+		group.POST("/:id/stop", web.WrapH(api.stopPlay))          // 停止播放（所有协议）
+		group.GET("/:id/media_info", web.WrapH(api.getMediaInfo)) // 获取流详细信息（音视频编码等）
 	}
 }
 
@@ -649,7 +650,7 @@ func (a IPCAPI) updateDevice(c *gin.Context, in *updateDeviceInput) (any, error)
 func (a IPCAPI) createDevice(c *gin.Context, in *ipc.AddDeviceInput) (any, error) {
 	in.Type = strings.ToUpper(in.Type)
 	if !slices.Contains([]string{ipc.TypeGB28181, ipc.TypeOnvif}, in.Type) {
-		return nil, reason.ErrBadRequest.SetMsg("不支持的设备类型")
+		return nil, reason.ErrBadRequest.WithMsg("不支持的设备类型")
 	}
 	return a.ipc.CreateDevice(c.Request.Context(), in)
 }
@@ -797,7 +798,7 @@ func (a IPCAPI) closeOldStream(ch *ipc.Channel) {
 func (a IPCAPI) createChannel(c *gin.Context, in *ipc.AddChannelInput) (any, error) {
 	in.Type = strings.ToUpper(in.Type)
 	if !slices.Contains([]string{ipc.TypeRTMP, ipc.TypeRTSP}, in.Type) {
-		return nil, reason.ErrBadRequest.SetMsg("仅支持 RTMP/RTSP 类型通道")
+		return nil, reason.ErrBadRequest.WithMsg("仅支持 RTMP/RTSP 类型通道")
 	}
 	return a.ipc.CreateChannel(c.Request.Context(), in)
 }
@@ -806,7 +807,7 @@ func (a IPCAPI) createChannel(c *gin.Context, in *ipc.AddChannelInput) (any, err
 func (a IPCAPI) deleteChannel(c *gin.Context, in *channelIDInput) (any, error) {
 	// 仅允许删除 RTMP/RTSP 类型通道
 	if !bz.IsRTMP(in.ID) && !bz.IsRTSP(in.ID) {
-		return nil, reason.ErrBadRequest.SetMsg("仅支持删除 RTMP/RTSP 类型通道")
+		return nil, reason.ErrBadRequest.WithMsg("仅支持删除 RTMP/RTSP 类型通道")
 	}
 
 	return a.ipc.DeleteChannel(c.Request.Context(), in.ID)
@@ -821,7 +822,7 @@ func (a IPCAPI) play(c *gin.Context, in *channelIDInput) (*playOutput, error) {
 	if bz.IsGB28181(channelID) {
 		// 防止错误的配置，无法收到流
 		if a.uc.Conf.Media.SDPIP == "127.0.0.1" {
-			return nil, reason.ErrUsedLogic.SetMsg("请先配置流媒体 SDP 收流地址")
+			return nil, reason.ErrUsedLogic.WithMsg("请先配置流媒体 SDP 收流地址")
 		}
 		ch, err := a.ipc.GetChannel(c.Request.Context(), channelID)
 		if err != nil {
@@ -839,7 +840,7 @@ func (a IPCAPI) play(c *gin.Context, in *channelIDInput) (*playOutput, error) {
 			return nil, err
 		}
 		if !ch.IsOnline {
-			return nil, reason.ErrNotFound.SetMsg("未推流")
+			return nil, reason.ErrNotFound.WithMsg("未推流")
 		}
 		app = ch.App
 		appStream = ch.Stream
@@ -871,11 +872,11 @@ func (a IPCAPI) play(c *gin.Context, in *channelIDInput) (*playOutput, error) {
 		appStream = channelID
 		mediaServerID = sms.DefaultMediaServerID
 	} else {
-		return nil, reason.ErrNotFound.SetMsg("不支持的播放通道")
+		return nil, reason.ErrNotFound.WithMsg("不支持的播放通道")
 	}
 
 	if !a.uc.SMSAPI.smsCore.IsOnline(mediaServerID) {
-		return nil, reason.ErrNotFound.SetMsg("Oops! 流媒体服务离线或IP有误")
+		return nil, reason.ErrNotFound.WithMsg("Oops! 流媒体服务离线或IP有误")
 	}
 	svr, err := a.uc.SMSAPI.smsCore.GetMediaServer(c.Request.Context(), mediaServerID)
 	if err != nil {
@@ -900,7 +901,16 @@ func (a IPCAPI) play(c *gin.Context, in *channelIDInput) (*playOutput, error) {
 		host = h
 	}
 
-	item := a.uc.SMSAPI.smsCore.GetStreamLiveAddr(svr, prefix, host, app, appStream)
+	playToken, err := web.NewToken(
+		map[string]any{"stream": appStream, "app": app},
+		a.uc.Conf.Server.HTTP.JwtSecret+"_play",
+		web.WithExpiresAt(time.Now().Add(42*time.Hour)),
+	)
+	if err != nil {
+		return nil, reason.ErrServer.WithMsg("生成播放token失败")
+	}
+
+	item := a.uc.SMSAPI.smsCore.GetStreamLiveAddr(svr, prefix, host, app, appStream, playToken)
 	out := playOutput{
 		App:    app,
 		Stream: appStream,
@@ -973,7 +983,7 @@ func (a IPCAPI) stopPlay(c *gin.Context, in *channelIDInput) (gin.H, error) {
 
 	ch, err := a.ipc.GetChannel(ctx, channelID)
 	if err != nil {
-		return nil, reason.ErrBadRequest.SetMsg("通道不存在")
+		return nil, reason.ErrBadRequest.WithMsg("通道不存在")
 	}
 
 	log = log.With("type", ch.GetType())
@@ -981,12 +991,12 @@ func (a IPCAPI) stopPlay(c *gin.Context, in *channelIDInput) (gin.H, error) {
 	if bz.IsGB28181(channelID) {
 		device, err := a.ipc.GetDevice(ctx, ch.DID)
 		if err != nil {
-			return nil, reason.ErrBadRequest.SetMsg("设备不存在")
+			return nil, reason.ErrBadRequest.WithMsg("设备不存在")
 		}
 
 		protocol := a.ipc.GetProtocol(ch.GetType())
 		if protocol == nil {
-			return nil, reason.ErrBadRequest.SetMsg("协议适配器不存在")
+			return nil, reason.ErrBadRequest.WithMsg("协议适配器不存在")
 		}
 
 		if err := protocol.StopPlay(ctx, device, ch); err != nil {
@@ -1033,6 +1043,43 @@ func (a IPCAPI) stopPlay(c *gin.Context, in *channelIDInput) (gin.H, error) {
 
 	log.InfoContext(ctx, "停止播放完成")
 	return gin.H{"msg": "ok"}, nil
+}
+
+// getMediaInfo 获取指定通道流的详细信息（音视频编码、分辨率、帧率等）
+func (a IPCAPI) getMediaInfo(c *gin.Context, in *channelIDInput) (any, error) {
+	channelID := in.ID
+	ctx := c.Request.Context()
+
+	ch, err := a.ipc.GetChannel(ctx, channelID)
+	if err != nil {
+		return nil, err
+	}
+
+	app := ch.GetApp()
+	stream := ch.GetStream()
+	if app == "" {
+		app = "rtp"
+	}
+
+	mediaServerID := ch.Config.MediaServerID
+	if mediaServerID == "" {
+		mediaServerID = sms.DefaultMediaServerID
+	}
+
+	svr, err := a.uc.SMSAPI.smsCore.GetMediaServer(ctx, mediaServerID)
+	if err != nil {
+		return nil, err
+	}
+
+	items, err := a.uc.SMSAPI.smsCore.GetMediaInfo(svr, app, stream)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, reason.ErrNotFound.WithMsg("流不在线或不存在")
+	}
+
+	return items[0], nil
 }
 
 type refreshSnapshotInput struct {
@@ -1142,7 +1189,7 @@ func (a IPCAPI) getSnapshot(c *gin.Context) {
 	channelID := c.Param("id")
 	body, err := readCover(a.uc.Conf.ConfigDir, channelID)
 	if err != nil {
-		web.Fail(c, reason.ErrNotFound.SetMsg(err.Error()))
+		web.Fail(c, reason.ErrNotFound.WithMsg(err.Error()))
 		return
 	}
 	c.Data(200, "image/jpeg", body)
@@ -1152,7 +1199,7 @@ func (a IPCAPI) discover(c *gin.Context) {
 	p := a.ipc.GetProtocol(ipc.TypeOnvif)
 	onvifAdapter, ok := p.(*onvifadapter.Adapter)
 	if !ok {
-		web.Fail(c, reason.ErrNotFound.SetMsg("不支持的协议"))
+		web.Fail(c, reason.ErrNotFound.WithMsg("不支持的协议"))
 		return
 	}
 
@@ -1223,7 +1270,7 @@ func (a IPCAPI) enableAI(c *gin.Context, in *channelIDInput) (gin.H, error) {
 	resp, err := a.uc.AIWebhookAPI.StartAIDetection(ctx, channel, rtspURL)
 	if err != nil {
 		slog.ErrorContext(ctx, "start camera AI", "err", err)
-		return nil, reason.ErrUsedLogic.SetMsg("启动 AI 检测失败: " + err.Error())
+		return nil, reason.ErrUsedLogic.WithMsg("启动 AI 检测失败: " + err.Error())
 	}
 
 	return gin.H{
@@ -1306,7 +1353,7 @@ func (a IPCAPI) setRecordMode(c *gin.Context, in *setRecordModeWithIDInput) (gin
 	switch in.Mode {
 	case "always", "ai", "none":
 	default:
-		return nil, reason.ErrBadRequest.SetMsg("mode must be one of: always, ai, none")
+		return nil, reason.ErrBadRequest.WithMsg("mode must be one of: always, ai, none")
 	}
 
 	// 更新通道的录像模式
@@ -1369,7 +1416,7 @@ func (a IPCAPI) ptzControl(c *gin.Context, in *ptzControlWithIDInput) (gin.H, er
 
 	// 检查设备是否在线
 	if !device.IsOnline {
-		return nil, reason.ErrBadRequest.SetMsg("设备离线")
+		return nil, reason.ErrBadRequest.WithMsg("设备离线")
 	}
 
 	slog.InfoContext(ctx, "PTZ 控制请求（跳过协议判断）",

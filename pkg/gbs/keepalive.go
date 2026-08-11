@@ -1,6 +1,8 @@
 package gbs
 
 import (
+	"log/slog"
+
 	"github.com/gowvp/owl/internal/core/ipc"
 	"github.com/gowvp/owl/pkg/gbs/sip"
 	"github.com/ixugo/goddd/pkg/orm"
@@ -21,6 +23,7 @@ func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
 	}
 
 	// 程序重启后内存丢失，收到 keepalive 时补上
+	_, alreadyLoaded := g.svr.memoryStorer.Load(ctx.DeviceID)
 	g.svr.memoryStorer.LoadOrStore(ctx.DeviceID, &Device{
 		conn:   ctx.Request.GetConnection(),
 		source: ctx.Source,
@@ -41,6 +44,12 @@ func (g *GB28181API) sipMessageKeepalive(ctx *sip.Context) {
 		d.region = ctx.To.URI.Host()
 	}); err != nil {
 		ctx.Log.Error("keepalive", "err", err)
+	}
+
+	// 必须在 Change(IsOnline=true) 之后触发，QueryCatalog 会检查 IsOnline
+	if !alreadyLoaded {
+		slog.Info("keepalive 触发 Catalog 补载", "device_id", ctx.DeviceID)
+		_ = g.QueryCatalog(ctx.DeviceID)
 	}
 
 	ctx.String(200, "OK")

@@ -297,12 +297,21 @@ func (n *NodeManager) GetSnapshot(server *MediaServer, in GetSnapRequest) ([]byt
 	return driver.GetSnapshot(context.Background(), server, &in)
 }
 
-func (n *NodeManager) GetStreamLiveAddr(server *MediaServer, httpPrefix, host, app, stream string) StreamLiveAddr {
+func (n *NodeManager) GetStreamLiveAddr(server *MediaServer, httpPrefix, host, app, stream, token string) StreamLiveAddr {
 	driver, err := n.getDriver(server.Type)
 	if err != nil {
 		return StreamLiveAddr{Label: err.Error()}
 	}
-	return driver.GetStreamLiveAddr(context.Background(), server, httpPrefix, host, app, stream)
+	return driver.GetStreamLiveAddr(context.Background(), server, httpPrefix, host, app, stream, token)
+}
+
+// GetMediaInfo 获取指定流的详细音视频轨道信息
+func (n *NodeManager) GetMediaInfo(server *MediaServer, app, stream string) ([]zlm.MediaItem, error) {
+	driver, err := n.getDriver(server.Type)
+	if err != nil {
+		return nil, err
+	}
+	return driver.GetMediaInfo(context.Background(), server, app, stream)
 }
 
 // StartRecord 开始录制指定流
