@@ -20,7 +20,7 @@ type MessageDeviceListResponse struct {
 
 // sipMessageCatalog 设备目录信息查询应答
 // GB/T28181 90 页 A.2.6.4
-func (g GB28181API) sipMessageCatalog(ctx *sip.Context) {
+func (g *GB28181API) sipMessageCatalog(ctx *sip.Context) {
 	// 调试：打印原始 XML 内容，确认球机返回的云台字段名
 	slog.Info("Catalog 原始 XML", "body", string(ctx.Request.Body()))
 

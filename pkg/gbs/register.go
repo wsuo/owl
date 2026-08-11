@@ -251,7 +251,7 @@ func (g *GB28181API) handlerRegister(ctx *sip.Context) {
 	_ = g.QueryConfigDownloadBasic(dev.GetGB28181DeviceID())
 }
 
-func (g GB28181API) login(ctx *sip.Context, fn func(d *ipc.Device) error) {
+func (g *GB28181API) login(ctx *sip.Context, fn func(d *ipc.Device) error) {
 	slog.Info("status change 设备上线", "device_id", ctx.DeviceID)
 	g.svr.memoryStorer.Change(ctx.DeviceID, fn, func(d *Device) {
 		d.conn = ctx.Request.GetConnection()
@@ -261,7 +261,7 @@ func (g GB28181API) login(ctx *sip.Context, fn func(d *ipc.Device) error) {
 	})
 }
 
-func (g GB28181API) logout(deviceID string, changeFn func(*ipc.Device) error) error {
+func (g *GB28181API) logout(deviceID string, changeFn func(*ipc.Device) error) error {
 	slog.Info("status change 设备离线", "device_id", deviceID)
 
 	// 设备离线前，遍历其所有通道，对有活跃流的通道发 BYE 释放 SIP 会话，
