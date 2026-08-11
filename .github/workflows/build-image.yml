@@ -62,7 +62,9 @@ jobs:
       - name: Save image digest
         run: |
           mkdir -p build
-          printf '%s\n' '${{ steps.image.outputs.digest }}' > build/image-digest.txt
+          index_digest='${{ steps.image.outputs.digest }}'
+          platform_digest="$(docker buildx imagetools inspect --raw "ghcr.io/wsuo/owl@${index_digest}" | jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest')"
+          printf '%s\n' "${platform_digest}" > build/image-digest.txt
       - uses: actions/upload-artifact@v4
         with:
           name: gowvp-image-digest-${{ github.sha }}
