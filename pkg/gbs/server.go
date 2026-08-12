@@ -298,8 +298,37 @@ func (s *Server) Play(in *PlayInput) error {
 	return s.gb.Play(in)
 }
 
+// EnsurePlay shares one GB28181 upstream session for all downstream readers.
+func (s *Server) EnsurePlay(ctx context.Context, channelID string, mediaServer *sms.MediaServer) error {
+	channel, err := s.gb.core.GetChannel(ctx, channelID)
+	if err != nil {
+		return err
+	}
+	device, err := s.gb.core.GetDevice(ctx, channel.DID)
+	if err != nil {
+		return err
+	}
+	return s.gb.EnsurePlay(ctx, &PlayInput{
+		Channel:    channel,
+		StreamMode: device.StreamMode,
+		SMS:        mediaServer,
+	})
+}
+
+func (s *Server) PlayEstablishing(deviceID, channelID string) bool {
+	return s.gb.playEstablishing(deviceID, channelID)
+}
+
+func (s *Server) IsMediaReady(mediaServer *sms.MediaServer, channelID string) bool {
+	return s.gb.mediaReady(mediaServer, channelID)
+}
+
 func (s *Server) StopPlay(ctx context.Context, in *StopPlayInput) error {
-	return s.gb.StopPlay(ctx, in)
+	err := s.gb.StopPlay(ctx, in)
+	if in != nil && in.Channel != nil {
+		s.gb.markPlayStopped(in.Channel)
+	}
+	return err
 }
 
 // QuerySnapshot 厂商实现抓图的少，sip 层已实现，先搁置

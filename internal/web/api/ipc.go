@@ -226,6 +226,7 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.PUT("/:id", web.WrapH(api.updateChannel))              // 修改通道（所有协议）
 		group.DELETE("/:id", web.WrapH(api.deleteChannel))           // 删除通道（RTMP/RTSP）
 		group.POST("/:id/play", web.WrapH(api.play))                 // 播放（所有协议）
+		group.POST("/:id/ensure-play", web.WrapH(api.ensurePlay))    // 播放并等待媒体就绪
 		group.POST("/:id/snapshot", web.WrapH(api.refreshSnapshot))  // 图像抓拍（所有协议）
 		group.GET("/:id/snapshot", api.getSnapshot)                  // 获取图像（所有协议）
 		group.POST("/:id/zones", web.WrapH(api.addZone))             // 添加区域（所有协议）
@@ -977,6 +978,54 @@ func (a IPCAPI) play(c *gin.Context, in *channelIDInput) (*playOutput, error) {
 		// }
 	}()
 	return &out, nil
+}
+
+type ensurePlayInput struct {
+	ID             string  `uri:"id" binding:"required"`
+	TimeoutSeconds float64 `form:"timeout_seconds"`
+}
+
+type ensurePlayOutput struct {
+	*playOutput
+	Ready bool `json:"ready"`
+}
+
+func (a IPCAPI) ensurePlay(c *gin.Context, in *ensurePlayInput) (*ensurePlayOutput, error) {
+	ctx := c.Request.Context()
+	if bz.IsGB28181(in.ID) {
+		ch, err := a.ipc.GetChannel(ctx, in.ID)
+		if err != nil {
+			return nil, err
+		}
+		serverID := ch.Config.MediaServerID
+		if serverID == "" {
+			serverID = sms.DefaultMediaServerID
+		}
+		server, err := a.uc.SMSAPI.smsCore.GetMediaServer(ctx, serverID)
+		if err != nil {
+			return nil, err
+		}
+		wait := 15 * time.Second
+		if in.TimeoutSeconds > 0 {
+			wait = time.Duration(in.TimeoutSeconds * float64(time.Second))
+			if wait > 30*time.Second {
+				wait = 30 * time.Second
+			}
+		}
+		waitCtx, cancel := context.WithTimeout(ctx, wait)
+		defer cancel()
+		if err := a.uc.SipServer.EnsurePlay(waitCtx, ch.ID, server); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return nil, reason.ErrTimeout.WithMsg("媒体流在启动超时时间内未就绪")
+			}
+			return nil, err
+		}
+	}
+	out, err := a.play(c, &channelIDInput{ID: in.ID})
+	if err != nil {
+		return nil, err
+	}
+	return &ensurePlayOutput{playOutput: out, Ready: true}, nil
 }
 
 // stopPlay 停止播放（幂等：始终返回成功）

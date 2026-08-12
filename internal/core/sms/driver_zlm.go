@@ -158,11 +158,13 @@ func (d *ZLMDriver) Setup(ctx context.Context, ms *MediaServer, webhookURL strin
 		HookOnStreamChanged:            new(fmt.Sprintf("%s/on_stream_changed", webhookURL)),
 		HookOnServerKeepalive:          new(fmt.Sprintf("%s/on_server_keepalive", webhookURL)),
 		HookOnServerStarted:            new(fmt.Sprintf("%s/on_server_started", webhookURL)),
-		HookTimeoutSec:                 new("10"),
-		HookAliveInterval:              new(fmt.Sprint(ms.HookAliveInterval)),
-		ProtocolContinuePushMs:         new("3000"),
-		RtpProxyPortRange:              &portRange,
-		FfmpegLog:                      new("./fflogs/ffmpeg.log"),
+		// Media readiness can legitimately take several seconds after INVITE.
+		// Keep webhook requests alive longer than the 15s coordinator wait.
+		HookTimeoutSec:         new("20"),
+		HookAliveInterval:      new(fmt.Sprint(ms.HookAliveInterval)),
+		ProtocolContinuePushMs: new("3000"),
+		RtpProxyPortRange:      &portRange,
+		FfmpegLog:              new("./fflogs/ffmpeg.log"),
 
 		// 为什么: 低延迟直播优化, 但保留 GOP 缓存保证首画面快速呈现。
 		// rtp_proxy.gop_cache 保持默认开启: 新连接进来立刻下发最近一个 I 帧缓冲, 首帧延迟 <1s; 由前端追帧消化多余缓冲。

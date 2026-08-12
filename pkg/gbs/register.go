@@ -43,6 +43,9 @@ type GB28181API struct {
 	svr *Server
 
 	sms *sms.NodeManager
+
+	playCoordMu sync.Mutex
+	playCoords  map[string]*playCoord
 }
 
 func NewGB28181API(cfg *conf.Bootstrap, store ipc.Adapter, sms *sms.NodeManager) *GB28181API {
@@ -55,6 +58,7 @@ func NewGB28181API(cfg *conf.Bootstrap, store ipc.Adapter, sms *sms.NodeManager)
 		}),
 		streams:     &conc.Map[string, *Streams]{},
 		sdPlaybacks: &conc.Map[string, *SDPlaybackSession]{},
+		playCoords:  make(map[string]*playCoord),
 	}
 	go g.catalog.Start(func(s string, channel []*Channels) {
 		// 零值不做变更，没有通道又何必注册上来

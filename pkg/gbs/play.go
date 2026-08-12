@@ -68,7 +68,9 @@ func (g *GB28181API) StopPlay(ctx context.Context, in *StopPlayInput) error {
 	return g.stopPlay(ch, in)
 }
 
-func (g *GB28181API) Play(in *PlayInput) error {
+// play performs one raw SIP/ZLM startup. Callers that initiate user/media
+// consumption should use EnsurePlay so concurrent requests share this work.
+func (g *GB28181API) play(in *PlayInput) error {
 	log := slog.With("deviceID", in.Channel.DeviceID, "channelID", in.Channel.ChannelID)
 	log.Info("开始播放流程")
 	ch, ok := g.svr.memoryStorer.GetChannel(in.Channel.DeviceID, in.Channel.ChannelID)
@@ -143,6 +145,7 @@ func (g *GB28181API) Play(in *PlayInput) error {
 	log.Debug("2. 发送SDP请求", "port", resp.Port)
 	if err := g.sipPlayPush2(ch, in, resp.Port, stream); err != nil {
 		log.Debug("2.1. 发送SDP请求失败", "err", err)
+		_, _ = g.sms.CloseRTPServer(in.SMS, zlm.CloseRTPServerRequest{StreamID: in.Channel.ID})
 		// INVITE 失败（含 400 Bad Request），确保播放状态被清除
 		g.svr.gb.core.UpdatePlaying(context.TODO(), in.Channel.DeviceID, in.Channel.ChannelID, false)
 		return err
@@ -151,6 +154,12 @@ func (g *GB28181API) Play(in *PlayInput) error {
 	g.svr.gb.core.UpdatePlaying(context.TODO(), in.Channel.DeviceID, in.Channel.ChannelID, true)
 
 	return nil
+}
+
+// Play is retained for low-level compatibility. New media consumers must use
+// Server.EnsurePlay, which waits for a ready video track and deduplicates INVITE.
+func (g *GB28181API) Play(in *PlayInput) error {
+	return g.play(in)
 }
 
 // GetIP 判断输入字符串并返回对应的IP地址

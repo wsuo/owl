@@ -39,6 +39,14 @@ func (a *Adapter) OnStreamChanged(ctx context.Context, app, stream string) error
 	if err != nil {
 		return err
 	}
+	// An old unregister callback can arrive after a replacement INVITE has
+	// started. Never let it stop the replacement session.
+	if a.gbs.PlayEstablishing(ch.DeviceID, ch.ChannelID) {
+		return nil
+	}
+	if svr, mediaErr := a.smsCore.GetMediaServer(ctx, sms.DefaultMediaServerID); mediaErr == nil && a.gbs.IsMediaReady(svr, ch.ID) {
+		return nil
+	}
 	// 更新播放状态为 false
 	if err := a.adapter.UpdatePlayingByID(ctx, ch.ID, false); err != nil {
 		return err
@@ -53,21 +61,12 @@ func (a *Adapter) OnStreamNotFound(ctx context.Context, app string, stream strin
 		return err
 	}
 
-	dev, err := a.adapter.GetDevice(ctx, ch.DID)
-	if err != nil {
-		return err
-	}
-
 	svr, err := a.smsCore.GetMediaServer(ctx, sms.DefaultMediaServerID)
 	if err != nil {
 		return err
 	}
 
-	return a.gbs.Play(&gbs.PlayInput{
-		Channel:    ch,
-		StreamMode: dev.StreamMode,
-		SMS:        svr,
-	})
+	return a.gbs.EnsurePlay(ctx, ch.ID, svr)
 }
 
 // QueryCatalog implements ipc.Protocoler.
