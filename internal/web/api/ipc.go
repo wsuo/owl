@@ -89,6 +89,13 @@ type nativeRecordingStartInput struct {
 	RecordingID     int64  `json:"recording_id"`
 }
 
+// nativeRecordingMaxSecond is deliberately larger than every platform task.
+// ZLMediaKit's max_second parameter is the MP4 segment length, not the total
+// recording duration. The backend stops the recording at the task deadline;
+// using the task duration here would create a second tail MP4 when stop is
+// processed a few seconds later.
+const nativeRecordingMaxSecond = 3600
+
 // deleteZoneInput 删除区域的路径参数（通道 ID + 区域名）
 type deleteZoneInput struct {
 	ID   string `uri:"id" binding:"required"`
@@ -1099,7 +1106,7 @@ func (a IPCAPI) startNativeRecording(c *gin.Context, in *nativeRecordingStartInp
 		App:        app,
 		Stream:     stream,
 		CustomPath: customPath,
-		MaxSecond:  duration,
+		MaxSecond:  nativeRecordingMaxSecond,
 	}); err != nil {
 		return nil, err
 	}
