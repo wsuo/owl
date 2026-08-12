@@ -74,6 +74,27 @@ func (w WebHookAPI) getChannelType(ctx context.Context, app, stream string) stri
 	return ipc.GetType(stream)
 }
 
+func (w WebHookAPI) hasActiveMP4Recording(ctx context.Context, mediaServerID, app, stream string) bool {
+	if mediaServerID == "" {
+		mediaServerID = sms.DefaultMediaServerID
+	}
+	server, err := w.smsCore.GetMediaServer(ctx, mediaServerID)
+	if err != nil {
+		w.log.WarnContext(ctx, "检查原生录像状态失败", "app", app, "stream", stream, "err", err)
+		return false
+	}
+	mediaList, err := w.smsCore.GetMediaList(server)
+	if err != nil || mediaList == nil {
+		return false
+	}
+	for _, item := range mediaList.Data {
+		if item.App == app && item.Stream == stream && item.IsRecordingMP4 {
+			return true
+		}
+	}
+	return false
+}
+
 func (w WebHookAPI) onServerStarted(c *gin.Context, _ *struct{}) (DefaultOutput, error) {
 	w.log.InfoContext(c.Request.Context(), "webhook onServerStarted")
 	// 所有 rtmp 通道离线
@@ -242,6 +263,13 @@ func (w WebHookAPI) onStreamNoneReader(c *gin.Context, in *onStreamNoneReaderInp
 		return onStreamNoneReaderOutput{Close: true}, nil
 	}
 
+	// 显式平台录像绕过全局自动录制开关，但仍需要保留没有前端观看者的
+	// H.265 流，直到 native stopRecord 完成；否则 ZLM 会在回调前关闭源流。
+	if w.hasActiveMP4Recording(ctx, in.MediaServerID, in.App, in.Stream) {
+		w.log.InfoContext(ctx, "原生录像进行中，保留无人观看的流", "app", in.App, "stream", in.Stream)
+		return onStreamNoneReaderOutput{Close: false}, nil
+	}
+
 	// 禁用录像时，直接关闭流
 	if w.uc.Conf.Server.Recording.Disabled {
 		// 更新通道的播放状态为未播放（所有协议统一处理）
@@ -334,17 +362,24 @@ func (w WebHookAPI) onRecordMP4(c *gin.Context, in *onRecordMP4Input) (DefaultOu
 		"start_time", in.StartTime,
 	)
 
-	// 计算相对路径：从配置的存储目录开始
-	relativePath := in.FilePath
-	if w.conf.Server.Recording.StorageDir != "" {
-		// 尝试提取相对路径
-		storageDir := w.conf.Server.Recording.StorageDir
-		if idx := strings.Index(in.FilePath, storageDir); idx >= 0 {
-			relativePath = in.FilePath[idx:]
-		} else {
-			// 使用 URL 字段作为相对路径
-			relativePath = in.URL
+	// 计算相对路径：ZLM 的 file_path 通常是绝对路径，而配置里的
+	// StorageDir 通常是相对工作目录的路径（例如 ./configs/recordings）。
+	// 不能直接用字符串查找，否则会把 URL 当成绝对路径，后续下载会找不到文件。
+	relativePath := filepath.Clean(in.FilePath)
+	if storageDir := strings.TrimSpace(w.conf.Server.Recording.StorageDir); storageDir != "" {
+		storageRoot, rootErr := filepath.Abs(storageDir)
+		filePath, fileErr := filepath.Abs(in.FilePath)
+		if rootErr == nil && fileErr == nil {
+			if rel, err := filepath.Rel(storageRoot, filePath); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				relativePath = rel
+			}
 		}
+		if filepath.IsAbs(relativePath) || relativePath == "." || strings.HasPrefix(relativePath, "..") {
+			relativePath = strings.TrimLeft(strings.TrimSpace(in.URL), "/")
+		}
+	}
+	if relativePath == "" || relativePath == "." {
+		relativePath = filepath.Base(in.FilePath)
 	}
 
 	// 计算开始和结束时间

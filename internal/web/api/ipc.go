@@ -83,6 +83,12 @@ type channelIDInput struct {
 	ID string `uri:"id" binding:"required"`
 }
 
+type nativeRecordingStartInput struct {
+	ID              string `uri:"id" binding:"required"`
+	DurationSeconds int    `json:"duration_seconds"`
+	RecordingID     int64  `json:"recording_id"`
+}
+
 // deleteZoneInput 删除区域的路径参数（通道 ID + 区域名）
 type deleteZoneInput struct {
 	ID   string `uri:"id" binding:"required"`
@@ -221,12 +227,14 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 	// 统一的通道管理 API（支持所有协议）
 	{
 		group := g.Group("/channels", handler...)
-		group.GET("", web.WrapH(api.listChannels))                   // 通道列表（所有协议）
-		group.POST("", web.WrapH(api.createChannel))                 // 添加通道（RTMP/RTSP）
-		group.PUT("/:id", web.WrapH(api.updateChannel))              // 修改通道（所有协议）
-		group.DELETE("/:id", web.WrapH(api.deleteChannel))           // 删除通道（RTMP/RTSP）
-		group.POST("/:id/play", web.WrapH(api.play))                 // 播放（所有协议）
-		group.POST("/:id/ensure-play", web.WrapH(api.ensurePlay))    // 播放并等待媒体就绪
+		group.GET("", web.WrapH(api.listChannels))                // 通道列表（所有协议）
+		group.POST("", web.WrapH(api.createChannel))              // 添加通道（RTMP/RTSP）
+		group.PUT("/:id", web.WrapH(api.updateChannel))           // 修改通道（所有协议）
+		group.DELETE("/:id", web.WrapH(api.deleteChannel))        // 删除通道（RTMP/RTSP）
+		group.POST("/:id/play", web.WrapH(api.play))              // 播放（所有协议）
+		group.POST("/:id/ensure-play", web.WrapH(api.ensurePlay)) // 播放并等待媒体就绪
+		group.POST("/:id/native-recording/start", web.WrapH(api.startNativeRecording))
+		group.POST("/:id/native-recording/stop", web.WrapH(api.stopNativeRecording))
 		group.POST("/:id/snapshot", web.WrapH(api.refreshSnapshot))  // 图像抓拍（所有协议）
 		group.GET("/:id/snapshot", api.getSnapshot)                  // 获取图像（所有协议）
 		group.POST("/:id/zones", web.WrapH(api.addZone))             // 添加区域（所有协议）
@@ -1026,6 +1034,129 @@ func (a IPCAPI) ensurePlay(c *gin.Context, in *ensurePlayInput) (*ensurePlayOutp
 		return nil, err
 	}
 	return &ensurePlayOutput{playOutput: out, Ready: true}, nil
+}
+
+// startNativeRecording 让 ZLMediaKit 直接把当前 H.265 流封装为 MP4。
+// 该接口只供平台任务调用；它不受全局自动录制开关影响，也不会启动解码器。
+func (a IPCAPI) startNativeRecording(c *gin.Context, in *nativeRecordingStartInput) (gin.H, error) {
+	ctx := c.Request.Context()
+	channel, err := a.ipc.GetChannel(ctx, in.ID)
+	if err != nil {
+		return nil, reason.ErrBadRequest.SetMsg("通道不存在")
+	}
+	if !channel.IsGB28181() && !channel.IsRTMP() && !channel.IsRTSP() && !channel.IsOnvif() {
+		return nil, reason.ErrBadRequest.SetMsg("当前通道类型不支持原生录像")
+	}
+	duration := in.DurationSeconds
+	if duration < 1 || duration > 3600 {
+		return nil, reason.ErrBadRequest.WithMsg("原生录像时长必须在 1 到 3600 秒之间")
+	}
+	if in.RecordingID <= 0 {
+		return nil, reason.ErrBadRequest.WithMsg("原生录像缺少平台任务 ID")
+	}
+
+	serverID := channel.Config.MediaServerID
+	if serverID == "" {
+		serverID = sms.DefaultMediaServerID
+	}
+	server, err := a.uc.SMSAPI.smsCore.GetMediaServer(ctx, serverID)
+	if err != nil {
+		return nil, err
+	}
+	if channel.IsGB28181() {
+		readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		if err := a.uc.SipServer.EnsurePlay(readyCtx, channel.ID, server); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return nil, reason.ErrTimeout.WithMsg("媒体流在启动超时时间内未就绪")
+			}
+			return nil, err
+		}
+	}
+
+	app, stream := channel.GetApp(), channel.GetStream()
+	mediaList, err := a.uc.SMSAPI.smsCore.GetMediaList(server)
+	if err != nil || mediaList == nil {
+		if err == nil {
+			err = errors.New("媒体服务器未返回流列表")
+		}
+		return nil, err
+	}
+	for _, item := range mediaList.Data {
+		if item.App == app && item.Stream == stream && item.IsRecordingMP4 {
+			return nil, reason.ErrBadRequest.WithMsg("当前流已有录像任务，无法启动平台原生录像")
+		}
+	}
+
+	customPath := filepath.Join(
+		a.uc.Conf.Server.Recording.StorageDir,
+		"platform",
+		fmt.Sprintf("server-recording-%d", in.RecordingID),
+	)
+	if _, err := a.uc.SMSAPI.smsCore.StartRecord(server, zlm.StartRecordRequest{
+		Type:       1,
+		Vhost:      "__defaultVhost__",
+		App:        app,
+		Stream:     stream,
+		CustomPath: customPath,
+		MaxSecond:  duration,
+	}); err != nil {
+		return nil, err
+	}
+	return gin.H{
+		"accepted":         true,
+		"channel_id":       channel.ID,
+		"app":              app,
+		"stream":           stream,
+		"duration_seconds": duration,
+		"recording_id":     in.RecordingID,
+	}, nil
+}
+
+// stopNativeRecording 停止显式的 ZLM MP4 录制。流已经断开时按幂等成功处理。
+func (a IPCAPI) stopNativeRecording(c *gin.Context, in *channelIDInput) (gin.H, error) {
+	ctx := c.Request.Context()
+	channel, err := a.ipc.GetChannel(ctx, in.ID)
+	if err != nil {
+		return nil, reason.ErrBadRequest.SetMsg("通道不存在")
+	}
+	if !channel.IsGB28181() && !channel.IsRTMP() && !channel.IsRTSP() && !channel.IsOnvif() {
+		return nil, reason.ErrBadRequest.SetMsg("当前通道类型不支持原生录像")
+	}
+	serverID := channel.Config.MediaServerID
+	if serverID == "" {
+		serverID = sms.DefaultMediaServerID
+	}
+	server, err := a.uc.SMSAPI.smsCore.GetMediaServer(ctx, serverID)
+	if err != nil {
+		return nil, err
+	}
+	app, stream := channel.GetApp(), channel.GetStream()
+	mediaList, mediaErr := a.uc.SMSAPI.smsCore.GetMediaList(server)
+	if mediaErr == nil {
+		if mediaList != nil {
+			recording := false
+			for _, item := range mediaList.Data {
+				if item.App == app && item.Stream == stream && item.IsRecordingMP4 {
+					recording = true
+					break
+				}
+			}
+			if !recording {
+				return gin.H{"accepted": true, "channel_id": channel.ID, "app": app, "stream": stream}, nil
+			}
+		}
+	} else if strings.Contains(mediaErr.Error(), "can not find the stream") {
+		return gin.H{"accepted": true, "channel_id": channel.ID, "app": app, "stream": stream}, nil
+	}
+	if _, err := a.uc.SMSAPI.smsCore.StopRecord(server, zlm.StopRecordRequest{
+		Type: 1, Vhost: "__defaultVhost__", App: app, Stream: stream,
+	}); err != nil {
+		if !strings.Contains(err.Error(), "can not find the stream") {
+			return nil, err
+		}
+	}
+	return gin.H{"accepted": true, "channel_id": channel.ID, "app": app, "stream": stream}, nil
 }
 
 // stopPlay 停止播放（幂等：始终返回成功）
