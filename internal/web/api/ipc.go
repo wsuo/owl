@@ -287,7 +287,12 @@ func (a IPCAPI) sdCardStatus(c *gin.Context, in *channelIDInput) (gin.H, error) 
 	if err != nil {
 		return nil, err
 	}
-	items, err := a.uc.SipServer.QuerySDCardStatus(channel)
+	refresh, _ := strconv.ParseBool(c.Query("refresh"))
+	query := a.uc.SipServer.QuerySDCardStatus
+	if refresh {
+		query = a.uc.SipServer.RefreshSDCardStatus
+	}
+	items, err := query(channel)
 	if errors.Is(err, gbs.ErrSDCardStatusTimeout) {
 		return nil, reason.ErrTimeout.SetHTTPStatus(504).SetMsg("存储卡状态查询超时")
 	}

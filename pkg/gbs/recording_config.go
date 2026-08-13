@@ -156,6 +156,23 @@ type sdCardQueryResult struct {
 	Items  []SDCardInfo
 }
 
+const sdCardStatusCacheTTL = 30 * time.Second
+
+type sdCardStatusCacheEntry struct {
+	mu         sync.Mutex
+	verifiedAt time.Time
+	items      []SDCardInfo
+}
+
+func (g *GB28181API) sdCardStatusCacheFor(channelID string) *sdCardStatusCacheEntry {
+	value, _ := g.sdCardStatusCache.LoadOrStore(channelID, &sdCardStatusCacheEntry{})
+	return value.(*sdCardStatusCacheEntry)
+}
+
+func cloneSDCardInfo(items []SDCardInfo) []SDCardInfo {
+	return append([]SDCardInfo(nil), items...)
+}
+
 type AlarmTypeParam struct {
 	EventType int `xml:"EventType,omitempty" json:"event_type,omitempty"`
 }
@@ -399,9 +416,26 @@ func (g *GB28181API) resolveConfigControl(sourceDeviceID string, msg deviceConfi
 }
 
 func (s *Server) QuerySDCardStatus(channel *ipc.Channel) ([]SDCardInfo, error) {
+	return s.querySDCardStatus(channel, false)
+}
+
+// RefreshSDCardStatus bypasses the short cache used to coalesce page-load and
+// capability-probe requests. A previous successful value is still returned if
+// the device does not answer before the bounded timeout.
+func (s *Server) RefreshSDCardStatus(channel *ipc.Channel) ([]SDCardInfo, error) {
+	return s.querySDCardStatus(channel, true)
+}
+
+func (s *Server) querySDCardStatus(channel *ipc.Channel, refresh bool) ([]SDCardInfo, error) {
 	dev, ok := s.memoryStorer.Load(channel.DeviceID)
 	if !ok || !dev.IsOnline || dev.conn == nil {
 		return nil, ErrDeviceOffline
+	}
+	cache := s.gb.sdCardStatusCacheFor(channel.ID)
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if !refresh && !cache.verifiedAt.IsZero() && time.Since(cache.verifiedAt) < sdCardStatusCacheTTL {
+		return cloneSDCardInfo(cache.items), nil
 	}
 	sn := sip.RandInt(100000, 999999)
 	key := configKey(channel.DeviceID, channel.ChannelID, sn)
@@ -424,8 +458,13 @@ func (s *Server) QuerySDCardStatus(channel *ipc.Channel) ([]SDCardInfo, error) {
 		if response.Result != "" && !strings.EqualFold(response.Result, "OK") {
 			return nil, fmt.Errorf("%w: %s", ErrSDCardStatusRejected, response.Result)
 		}
-		return response.Items, nil
-	case <-time.After(10 * time.Second):
+		cache.items = cloneSDCardInfo(response.Items)
+		cache.verifiedAt = time.Now().UTC()
+		return cloneSDCardInfo(cache.items), nil
+	case <-time.After(5 * time.Second):
+		if !cache.verifiedAt.IsZero() {
+			return cloneSDCardInfo(cache.items), nil
+		}
 		return nil, ErrSDCardStatusTimeout
 	}
 }
