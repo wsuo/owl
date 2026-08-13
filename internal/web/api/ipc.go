@@ -1108,7 +1108,9 @@ func (a IPCAPI) startNativeRecording(c *gin.Context, in *nativeRecordingStartInp
 		CustomPath: customPath,
 		MaxSecond:  nativeRecordingMaxSecond,
 	}); err != nil {
-		return nil, err
+		// Preserve ZLM's concrete error (for example, a stream that vanished
+		// between EnsurePlay and startRecord) for backend retry and UI display.
+		return nil, reason.ErrBadRequest.WithMsg(err.Error())
 	}
 	return gin.H{
 		"accepted":         true,
@@ -1160,7 +1162,7 @@ func (a IPCAPI) stopNativeRecording(c *gin.Context, in *channelIDInput) (gin.H, 
 		Type: 1, Vhost: "__defaultVhost__", App: app, Stream: stream,
 	}); err != nil {
 		if !strings.Contains(err.Error(), "can not find the stream") {
-			return nil, err
+			return nil, reason.ErrBadRequest.WithMsg(err.Error())
 		}
 	}
 	return gin.H{"accepted": true, "channel_id": channel.ID, "app": app, "stream": stream}, nil
