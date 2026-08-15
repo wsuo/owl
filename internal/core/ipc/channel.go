@@ -91,8 +91,9 @@ func (c Core) GetChannel(ctx context.Context, id string) (*Channel, error) {
 	return &out, nil
 }
 
-// CreateChannel 添加 RTMP/RTSP 通道，支持自动创建虚拟设备
-// RTMP/RTSP: 支持自定义 app 和 stream，但禁止使用 app=rtp（rtp 专用于 GB28181）
+// CreateChannel 添加 RTMP/RTSP 通道，支持自动创建虚拟设备。
+// app=rtp 也可用于只复用 ZLMediaKit RTP 接收器的外部协议桥接通道；
+// 通道类型仍是 RTMP，不会进入 GB28181 SIP 控制路径。
 func (c Core) CreateChannel(ctx context.Context, in *AddChannelInput) (*Channel, error) {
 	// 仅支持 RTMP/RTSP 类型
 	if in.Type != TypeRTMP && in.Type != TypeRTSP {
@@ -102,11 +103,6 @@ func (c Core) CreateChannel(ctx context.Context, in *AddChannelInput) (*Channel,
 	// 验证必填字段
 	if in.Name == "" {
 		return nil, reason.ErrBadRequest.WithMsg("通道名称不能为空")
-	}
-
-	// 禁止 app=rtp，rtp 专用于 GB28181 协议
-	if strings.EqualFold(in.App, "rtp") {
-		return nil, reason.ErrBadRequest.WithMsg("app=rtp 为 GB28181 专用，RTMP/RTSP 不可使用")
 	}
 
 	var deviceID string
@@ -206,10 +202,6 @@ func getDevicePrefix(t string) string {
 // UpdateChannel 部分更新通道信息
 // 仅覆盖前端实际传入的非零值字段，避免 copier 零值覆盖导致数据丢失
 func (c Core) UpdateChannel(ctx context.Context, in *EditChannelInput, id string) (*Channel, error) {
-	if strings.EqualFold(in.App, "rtp") {
-		return nil, reason.ErrBadRequest.WithMsg("app=rtp 为 GB28181 专用，RTMP/RTSP 不可使用")
-	}
-
 	var out Channel
 	if err := c.store.Channel().Update(ctx, &out, func(b *Channel) error {
 		if in.Name != "" {
