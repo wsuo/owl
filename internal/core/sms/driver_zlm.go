@@ -47,7 +47,10 @@ func (d *ZLMDriver) GetStreamLiveAddr(ctx context.Context, ms *MediaServer, http
 	wsPrefix := strings.Replace(strings.Replace(httpPrefix, "https", "wss", 1), "http", "ws", 1)
 	out.WSFLV = fmt.Sprintf("%s/proxy/sms/%s/%s.live.flv?token=%s", wsPrefix, app, stream, token)
 	out.FLV = fmt.Sprintf("%s/proxy/sms/%s/%s.live.flv?token=%s", httpPrefix, app, stream, token)
-	out.HLS = fmt.Sprintf("%s/proxy/sms/%s/%s/hls.fmp4.m3u8?token=%s", httpPrefix, app, stream, token)
+	// The miniapp uses the ordinary video element. Keep this on regular
+	// MPEG-TS HLS; HLS-fMP4 would create init.mp4/fragment MP4 assets and is
+	// not the compatibility path used by the miniapp.
+	out.HLS = fmt.Sprintf("%s/proxy/sms/%s/%s/hls.m3u8?token=%s", httpPrefix, app, stream, token)
 	rtcPrefix := strings.Replace(strings.Replace(httpPrefix, "https", "webrtc", 1), "http", "webrtc", 1)
 	out.WebRTC = fmt.Sprintf("%s/proxy/sms/index/api/webrtc?app=%s&stream=%s&type=play&token=%s", rtcPrefix, app, stream, token)
 	out.RTMP = fmt.Sprintf("rtmp://%s:%d/%s/%s", host, ms.Ports.RTMP, app, stream)
@@ -138,9 +141,9 @@ func (d *ZLMDriver) Setup(ctx context.Context, ms *MediaServer, webhookURL strin
 
 		ProtocolEnableTs:   new("0"),
 		ProtocolEnableFmp4: new("0"),
-		ProtocolEnableHls:  new("0"),
-		// HLS-fMP4 会把 init.mp4、分片 MP4 和 m3u8 写入 www/rtp。
-		// 本平台只通过 WebRTC/FLV 转发媒体，服务器禁止保存任何视频文件。
+		ProtocolEnableHls:  new("1"),
+		// 普通 HLS 为小程序原生 video 提供兼容的 m3u8/TS 播放链路。
+		// 分片是直播期间的短期临时文件，不进入录像目录。
 		ProtocolEnableHlsFmp4: new("0"),
 		// 官方 v1.4.21 的增强 RTMP 能力与禁用 HLS 分片互不冲突。
 		RtmpEnhanced: new("1"),

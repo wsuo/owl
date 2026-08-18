@@ -5,6 +5,16 @@ import (
 	"testing"
 )
 
+func TestZLMStreamLiveAddrUsesRegularHLS(t *testing.T) {
+	driver := NewZLMDriver()
+	addr := driver.GetStreamLiveAddr(nil, &MediaServer{}, "https://nvr.example", "nvr.example", "isup", "camera01", "play-token")
+
+	want := "https://nvr.example/proxy/sms/isup/camera01/hls.m3u8?token=play-token"
+	if addr.HLS != want {
+		t.Fatalf("HLS address = %q, want %q", addr.HLS, want)
+	}
+}
+
 // TestStreamLiveAddrJSONFieldNames 保证播放地址只输出新的破坏式字段名。
 func TestStreamLiveAddrJSONFieldNames(t *testing.T) {
 	raw, err := json.Marshal(StreamLiveAddr{FLV: "http", WSFLV: "websocket"})

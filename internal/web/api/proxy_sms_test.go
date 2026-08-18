@@ -59,7 +59,7 @@ func TestVerifyPlayToken(t *testing.T) {
 		},
 		{
 			name:       "正常 hls 请求",
-			path:       "/live/camera01/hls.fmp4.m3u8",
+			path:       "/live/camera01/hls.m3u8",
 			query:      "token=" + makePlayToken(t, "live", "camera01", time.Now().Add(42*time.Hour)),
 			wantStatus: http.StatusOK,
 		},
