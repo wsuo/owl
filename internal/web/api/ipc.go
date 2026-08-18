@@ -83,6 +83,12 @@ type channelIDInput struct {
 	ID string `uri:"id" binding:"required"`
 }
 
+type playTokenWithIDInput struct {
+	ID     string `uri:"id" binding:"required"`
+	App    string `json:"app" binding:"required"`
+	Stream string `json:"stream" binding:"required"`
+}
+
 type nativeRecordingStartInput struct {
 	ID              string `uri:"id" binding:"required"`
 	DurationSeconds int    `json:"duration_seconds"`
@@ -239,6 +245,7 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.PUT("/:id", web.WrapH(api.updateChannel))           // 修改通道（所有协议）
 		group.DELETE("/:id", web.WrapH(api.deleteChannel))        // 删除通道（RTMP/RTSP）
 		group.POST("/:id/play", web.WrapH(api.play))              // 播放（所有协议）
+		group.POST("/:id/play-token", web.WrapH(api.playToken))   // 为内部已发布流签发播放 token
 		group.POST("/:id/ensure-play", web.WrapH(api.ensurePlay)) // 播放并等待媒体就绪
 		group.POST("/:id/native-recording/start", web.WrapH(api.startNativeRecording))
 		group.POST("/:id/native-recording/stop", web.WrapH(api.stopNativeRecording))
@@ -998,6 +1005,24 @@ func (a IPCAPI) play(c *gin.Context, in *channelIDInput) (*playOutput, error) {
 		// }
 	}()
 	return &out, nil
+}
+
+func (a IPCAPI) playToken(c *gin.Context, in *playTokenWithIDInput) (gin.H, error) {
+	if _, err := a.ipc.GetChannel(c.Request.Context(), in.ID); err != nil {
+		return nil, reason.ErrBadRequest.WithMsg("通道不存在")
+	}
+	if strings.ContainsAny(in.App, "/?\\") || strings.ContainsAny(in.Stream, "/?\\") || in.App == "" || in.Stream == "" {
+		return nil, reason.ErrBadRequest.WithMsg("播放流标识无效")
+	}
+	playToken, err := web.NewToken(
+		map[string]any{"stream": in.Stream, "app": in.App},
+		a.uc.Conf.Server.HTTP.JwtSecret+"_play",
+		web.WithExpiresAt(time.Now().Add(42*time.Hour)),
+	)
+	if err != nil {
+		return nil, reason.ErrServer.WithMsg("生成播放token失败")
+	}
+	return gin.H{"token": playToken}, nil
 }
 
 type ensurePlayInput struct {
