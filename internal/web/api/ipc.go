@@ -876,7 +876,25 @@ func (a IPCAPI) play(c *gin.Context, in *channelIDInput) (*playOutput, error) {
 			return nil, err
 		}
 		if !ch.IsOnline {
-			return nil, reason.ErrNotFound.WithMsg("未推流")
+			// IsOnline 只在 onPublish 钩子里更新；推流早于通道创建时标志会漏标
+			// （首次播放竞态），此时以 ZLM 实际注册的媒体为准并回补标志。
+			live, liveErr := a.rtmpStreamLive(c.Request.Context(), ch)
+			if liveErr != nil {
+				slog.WarnContext(c.Request.Context(), "查询 RTMP 通道流媒体状态失败", "channel_id", ch.ID, "err", liveErr)
+				return nil, reason.ErrServer.WithMsg("查询流媒体状态失败")
+			}
+			if !live {
+				return nil, reason.ErrNotFound.WithMsg("未推流")
+			}
+			now := orm.Now()
+			updated, updateErr := a.ipc.UpdateChannelConfigAndOnline(c.Request.Context(), ch.ID, true, func(cfg *ipc.StreamConfig) {
+				cfg.PushedAt = &now
+			})
+			if updateErr != nil {
+				slog.WarnContext(c.Request.Context(), "回补 RTMP 通道在线状态失败", "channel_id", ch.ID, "err", updateErr)
+			} else {
+				ch = updated
+			}
 		}
 		app = ch.App
 		appStream = ch.Stream
@@ -1005,6 +1023,26 @@ func (a IPCAPI) play(c *gin.Context, in *channelIDInput) (*playOutput, error) {
 		// }
 	}()
 	return &out, nil
+}
+
+// rtmpStreamLive 以 ZLM 实际注册的媒体判断 RTMP 通道当前是否有流。
+// 任一 schema 注册即视为有流（推流可能是 rtmp，也可能是 rtsp 直通推流）。
+func (a IPCAPI) rtmpStreamLive(ctx context.Context, ch *ipc.Channel) (bool, error) {
+	mediaServerID := ch.Config.MediaServerID
+	if mediaServerID == "" {
+		mediaServerID = sms.DefaultMediaServerID
+	}
+	svr, err := a.uc.SMSAPI.smsCore.GetMediaServer(ctx, mediaServerID)
+	if err != nil {
+		return false, err
+	}
+	resp, err := a.uc.SMSAPI.smsCore.GetMediaList(svr)
+	if err != nil {
+		return false, err
+	}
+	return slices.ContainsFunc(resp.Data, func(item zlm.MediaItem) bool {
+		return item.App == ch.App && item.Stream == ch.Stream
+	}), nil
 }
 
 func (a IPCAPI) playToken(c *gin.Context, in *playTokenWithIDInput) (gin.H, error) {
