@@ -208,14 +208,20 @@ type ptzControlWithIDInput struct {
 }
 
 func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
-	// GB28181 协议特有的回调接口
-	g.Any("/gb28181/snapshot", func(c *gin.Context) {
-		b, err := io.ReadAll(c.Request.Body)
+	g.POST("/gb28181/snapshot", func(c *gin.Context) {
+		const maxSnapshotSize = 12 << 20
+		b, err := io.ReadAll(io.LimitReader(c.Request.Body, maxSnapshotSize+1))
 		if err != nil {
-			panic(err)
+			c.JSON(400, gin.H{"msg": "读取抓图失败"})
+			return
 		}
-		if err := os.WriteFile(orm.GenerateRandomString(10)+".jpg", b, 0o644); err != nil {
-			slog.ErrorContext(c.Request.Context(), "write cover", "err", err)
+		if len(b) > maxSnapshotSize {
+			c.JSON(413, gin.H{"msg": "抓图文件过大"})
+			return
+		}
+		if err := api.uc.SipServer.ReceiveNativeSnapshot(c.Query("session_id"), c.Query("device_id"), b); err != nil {
+			c.JSON(404, gin.H{"msg": err.Error()})
+			return
 		}
 		c.JSON(200, gin.H{"msg": "ok"})
 	})
@@ -249,8 +255,9 @@ func registerGB28181(g gin.IRouter, api IPCAPI, handler ...gin.HandlerFunc) {
 		group.POST("/:id/ensure-play", web.WrapH(api.ensurePlay)) // 播放并等待媒体就绪
 		group.POST("/:id/native-recording/start", web.WrapH(api.startNativeRecording))
 		group.POST("/:id/native-recording/stop", web.WrapH(api.stopNativeRecording))
-		group.POST("/:id/snapshot", web.WrapH(api.refreshSnapshot))  // 图像抓拍（所有协议）
-		group.GET("/:id/snapshot", api.getSnapshot)                  // 获取图像（所有协议）
+		group.POST("/:id/snapshot", web.WrapH(api.refreshSnapshot)) // 图像抓拍（所有协议）
+		group.GET("/:id/snapshot", api.getSnapshot)                 // 获取图像（所有协议）
+		group.POST("/:id/native-snapshot", api.nativeSnapshot)
 		group.POST("/:id/zones", web.WrapH(api.addZone))             // 添加区域（所有协议）
 		group.GET("/:id/zones", web.WrapH(api.getZones))             // 获取区域（所有协议）
 		group.DELETE("/:id/zones/:name", web.WrapH(api.deleteZone))  // 删除区域（所有协议）
@@ -1352,6 +1359,32 @@ type refreshSnapshotInput struct {
 	WithinSeconds int64 `json:"within_seconds"`
 	// 取快照的链接地址
 	URL string `json:"url"`
+}
+
+func (a IPCAPI) nativeSnapshot(c *gin.Context) {
+	channelID := c.Param("id")
+	channel, err := a.ipc.GetChannel(c.Request.Context(), channelID)
+	if err != nil {
+		c.JSON(404, gin.H{"msg": "通道不存在"})
+		return
+	}
+	if !channel.IsGB28181() {
+		c.JSON(400, gin.H{"msg": "仅支持 GB28181 通道"})
+		return
+	}
+
+	callbackURL := strings.TrimRight(web.GetBaseURL(c.Request), "/") + "/gb28181/snapshot"
+	if value := strings.TrimSpace(c.Query("callback_url")); value != "" {
+		callbackURL = value
+	}
+	image, err := a.uc.SipServer.QueryNativeSnapshot(channel.DeviceID, channel.ChannelID, callbackURL)
+	if err != nil {
+		c.JSON(502, gin.H{"msg": err.Error()})
+		return
+	}
+	c.Header("Content-Type", "image/jpeg")
+	c.Header("Content-Disposition", fmt.Sprintf("inline; filename=%s-native.jpg", channelID))
+	c.Data(200, "image/jpeg", image)
 }
 
 func (a IPCAPI) refreshSnapshot(c *gin.Context, in *refreshSnapshotWithIDInput) (any, error) {

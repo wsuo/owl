@@ -331,9 +331,16 @@ func (s *Server) StopPlay(ctx context.Context, in *StopPlayInput) error {
 	return err
 }
 
-// QuerySnapshot 厂商实现抓图的少，sip 层已实现，先搁置
 func (s *Server) QuerySnapshot(deviceID, channelID string) error {
 	return s.gb.QuerySnapshot(deviceID, channelID)
+}
+
+func (s *Server) QueryNativeSnapshot(deviceID, channelID, callbackURL string) ([]byte, error) {
+	return s.gb.QueryNativeSnapshot(deviceID, channelID, callbackURL)
+}
+
+func (s *Server) ReceiveNativeSnapshot(sessionID, deviceID string, image []byte) error {
+	return s.gb.ReceiveNativeSnapshot(sessionID, deviceID, image)
 }
 
 // PTZControl 云台控制

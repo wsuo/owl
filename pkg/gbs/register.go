@@ -38,6 +38,7 @@ type GB28181API struct {
 	sdCardQueries       sync.Map
 	sdCardStatusCache   sync.Map
 	recordingCaps       sync.Map
+	nativeSnapshots     sync.Map
 	alarmEventsMu       sync.Mutex
 	alarmEvents         []AlarmEvent
 
