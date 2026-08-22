@@ -112,6 +112,7 @@ type MediaItem struct {
 	ReaderCount      int          `json:"readerCount"`
 	TotalReaderCount int          `json:"totalReaderCount"`
 	AliveSecond      int          `json:"aliveSecond"`
+	BytesSpeed       int64        `json:"bytesSpeed"` // 当前入流速度（字节/秒）
 	Tracks           []MediaTrack `json:"tracks"`
 }
 

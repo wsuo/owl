@@ -690,6 +690,10 @@ paths:
                   alive_second:
                     type: integer
                     description: 流存活时长（秒）
+                  bytesSpeed:
+                    type: integer
+                    format: int64
+                    description: ZLMediaKit 服务端入口当前流速（字节/秒）
                   origin_type_str:
                     type: string
                     description: 流来源类型
